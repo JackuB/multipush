@@ -814,6 +814,7 @@ dependencies = [
  "base64",
  "multipush-core",
  "octocrab",
+ "serde_json",
  "tokio",
  "tracing",
 ]
