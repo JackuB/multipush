@@ -1,0 +1,13 @@
+[package]
+name = "multipush-provider-github"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+multipush-core = { workspace = true }
+octocrab = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "multipush-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "multipush"
+path = "src/main.rs"
+
+[dependencies]
+multipush-core = { workspace = true }
+multipush-provider-github = { workspace = true }
+multipush-rules = { workspace = true }
+multipush-formatters = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

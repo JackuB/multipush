@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/multipush-core",
+    "crates/multipush-provider-github",
+    "crates/multipush-rules",
+    "crates/multipush-formatters",
+    "crates/multipush-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+
+# Async
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Error handling & logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Pattern matching
+globset = "0.4"
+regex = "1"
+
+# GitHub
+octocrab = "0.41"
+base64 = "0.22"
+
+# Output formatting
+tabled = "0.17"
+owo-colors = "4"
+
+# Internal crates
+multipush-core = { path = "crates/multipush-core" }
+multipush-provider-github = { path = "crates/multipush-provider-github" }
+multipush-rules = { path = "crates/multipush-rules" }
+multipush-formatters = { path = "crates/multipush-formatters" }
+multipush-cli = { path = "crates/multipush-cli" }
