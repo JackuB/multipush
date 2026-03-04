@@ -9,7 +9,7 @@ pub enum RuleDefinition {
     FileMatches(FileMatchesConfig),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnsureFileConfig {
     pub path: String,

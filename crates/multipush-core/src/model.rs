@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +93,19 @@ impl fmt::Display for Severity {
             Self::Info => write!(f, "info"),
             Self::Warning => write!(f, "warning"),
             Self::Error => write!(f, "error"),
+        }
+    }
+}
+
+impl FromStr for Severity {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "info" => Ok(Self::Info),
+            "warning" => Ok(Self::Warning),
+            "error" => Ok(Self::Error),
+            other => Err(format!("unknown severity: {other}")),
         }
     }
 }

@@ -787,12 +787,14 @@ name = "multipush-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "globset",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

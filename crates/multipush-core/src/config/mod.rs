@@ -1,9 +1,11 @@
 mod defaults;
+mod loader;
 mod policy;
 mod provider;
 mod rules;
 
 pub use defaults::{ApplyConfig, DefaultsConfig, ExistingPrStrategy};
+pub use loader::load_config;
 pub use policy::{FilterConfig, PolicyConfig, TargetConfig};
 pub use provider::{ProviderConfig, ProviderType};
 pub use rules::{

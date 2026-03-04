@@ -1,0 +1,23 @@
+provider:
+  type: github
+  org: ${GITHUB_ORG}
+  token: ${GITHUB_TOKEN}
+
+policies:
+  - name: require-readme
+    description: Every repository should have a README
+    severity: error
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !ensure_file
+        path: README.md
+
+  - name: require-license
+    description: Every repository should have a LICENSE file
+    severity: warning
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !ensure_file
+        path: LICENSE
