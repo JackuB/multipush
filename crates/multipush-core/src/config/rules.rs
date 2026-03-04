@@ -27,7 +27,7 @@ pub enum EnsureFileMode {
     Contains,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnsureJsonKeyConfig {
     pub path: String,
@@ -45,7 +45,7 @@ pub enum JsonKeyMode {
     Enforce,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnsureYamlKeyConfig {
     pub path: String,
@@ -55,7 +55,7 @@ pub struct EnsureYamlKeyConfig {
     pub mode: JsonKeyMode,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileMatchesConfig {
     pub path: String,
