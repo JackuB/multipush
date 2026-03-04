@@ -3,7 +3,10 @@ use std::fmt::Write;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
-use multipush_core::formatter::{Formatter, PolicyReport, Report, RepoOutcome};
+use multipush_core::engine::executor::ApplyReport;
+use multipush_core::formatter::{
+    build_pr_action_map, format_pr_summary, Formatter, PolicyReport, Report, RepoOutcome,
+};
 
 #[derive(Tabled)]
 struct Row {
@@ -13,6 +16,18 @@ struct Row {
     status: String,
     #[tabled(rename = "Detail")]
     detail: String,
+}
+
+#[derive(Tabled)]
+struct ApplyRow {
+    #[tabled(rename = "Repository")]
+    repo: String,
+    #[tabled(rename = "Status")]
+    status: String,
+    #[tabled(rename = "Action")]
+    action: String,
+    #[tabled(rename = "PR")]
+    pr: String,
 }
 
 pub struct TableFormatter {
@@ -122,13 +137,74 @@ impl Formatter for TableFormatter {
 
         Ok(out)
     }
+
+    fn format_apply(&self, apply_report: &ApplyReport) -> multipush_core::Result<String> {
+        let report = &apply_report.report;
+        let action_map = build_pr_action_map(apply_report);
+
+        let mut out = String::new();
+
+        for (i, policy) in report.results.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+
+            let desc = policy
+                .description
+                .as_deref()
+                .map(|d| format!("  {d}"))
+                .unwrap_or_default();
+            writeln!(out, "Policy: {}{desc}", policy.policy_name).unwrap();
+
+            let rows: Vec<ApplyRow> = policy
+                .repo_results
+                .iter()
+                .map(|rr| {
+                    let key = (rr.repo_name.clone(), policy.policy_name.clone());
+                    let (action_label, pr_url) = action_map
+                        .get(&key)
+                        .map(|(a, u)| (a.clone(), u.clone()))
+                        .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+
+                    ApplyRow {
+                        repo: rr.repo_name.clone(),
+                        status: self.format_status(&rr.outcome),
+                        action: action_label,
+                        pr: pr_url,
+                    }
+                })
+                .collect();
+
+            if rows.is_empty() {
+                writeln!(out, "  (no repositories matched)").unwrap();
+            } else {
+                let table = Table::new(rows).with(Style::sharp()).to_string();
+                writeln!(out, "{table}").unwrap();
+            }
+        }
+
+        let s = &report.summary;
+        write!(
+            out,
+            "Summary: {} pass, {} fail, {} skip, {} errors | PRs: {}",
+            s.passing,
+            s.failing,
+            s.skipped,
+            s.errors,
+            format_pr_summary(apply_report),
+        )
+        .unwrap();
+
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use multipush_core::engine::executor::{PrAction, PrActionKind};
     use multipush_core::formatter::{RepoResult, Summary};
-    use multipush_core::model::Severity;
+    use multipush_core::model::{PrState, PullRequest, Severity};
 
     fn make_report(policies: Vec<PolicyReport>, summary: Summary) -> Report {
         Report {
@@ -264,5 +340,68 @@ mod tests {
         let output = formatter.format(&report).unwrap();
 
         assert_eq!(output, "Summary: 0 pass, 0 fail, 0 skip, 0 errors");
+    }
+
+    #[test]
+    fn format_apply_with_pr_actions() {
+        let report = make_report(
+            vec![PolicyReport {
+                policy_name: "require-license".to_string(),
+                description: Some("All repos must have a LICENSE".to_string()),
+                severity: Severity::Error,
+                repo_results: vec![
+                    RepoResult {
+                        repo_name: "org/alpha".to_string(),
+                        default_branch: "main".to_string(),
+                        outcome: RepoOutcome::Pass {
+                            detail: "File LICENSE exists".to_string(),
+                        },
+                    },
+                    RepoResult {
+                        repo_name: "org/beta".to_string(),
+                        default_branch: "main".to_string(),
+                        outcome: RepoOutcome::Fail {
+                            detail: "File LICENSE does not exist".to_string(),
+                            remediations: vec![],
+                        },
+                    },
+                ],
+            }],
+            Summary {
+                total_repos: 2,
+                passing: 1,
+                failing: 1,
+                skipped: 0,
+                errors: 0,
+            },
+        );
+
+        let apply_report = ApplyReport {
+            report,
+            prs_created: vec![PrAction {
+                repo_name: "org/beta".to_string(),
+                policy_name: "require-license".to_string(),
+                branch: "multipush/require-license".to_string(),
+                pr: Some(PullRequest {
+                    number: 7,
+                    title: "Add LICENSE".to_string(),
+                    head_branch: "multipush/require-license".to_string(),
+                    url: "https://github.com/org/beta/pull/7".to_string(),
+                    state: PrState::Open,
+                }),
+                action: PrActionKind::Created,
+            }],
+            prs_updated: vec![],
+            prs_skipped: vec![],
+            prs_limited: 0,
+        };
+
+        let formatter = TableFormatter::with_color(false);
+        let output = formatter.format_apply(&apply_report).unwrap();
+
+        assert!(output.contains("Policy: require-license"));
+        assert!(output.contains("PR created"));
+        assert!(output.contains("https://github.com/org/beta/pull/7"));
+        assert!(output.contains("PRs: 1 created"));
     }
 }

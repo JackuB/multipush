@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use tracing::error;
 
 use multipush_core::config::{load_config, ConfigSource};
-use multipush_core::engine::{evaluate, execute, ApplyReport, PrActionKind};
+use multipush_core::engine::{evaluate, execute};
 use multipush_core::formatter::RepoOutcome;
 use multipush_core::model::Severity;
 
@@ -73,6 +73,10 @@ enum Command {
         #[arg(short, long)]
         config: Vec<PathBuf>,
 
+        /// Output format
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
         /// Run only named policies (repeatable)
         #[arg(short, long)]
         policy: Vec<String>,
@@ -92,6 +96,14 @@ enum Command {
         /// Suppress output except errors
         #[arg(short, long)]
         quiet: bool,
+
+        /// Disable colors
+        #[arg(long)]
+        no_color: bool,
+
+        /// Exit 1 if any result >= severity
+        #[arg(long, default_value = "error")]
+        fail_on: Severity,
     },
 }
 
@@ -156,15 +168,18 @@ fn main() -> ExitCode {
         }
         Command::Apply {
             config,
+            format,
             policy,
             dry_run,
             max_prs,
             verbose,
             quiet,
+            no_color,
+            fail_on,
         } => {
             init_tracing(verbose, quiet);
 
-            match run_apply(config, policy, dry_run, max_prs) {
+            match run_apply(config, format, policy, dry_run, max_prs, no_color, fail_on) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -238,9 +253,12 @@ fn run_check(
 
 fn run_apply(
     config_paths: Vec<PathBuf>,
+    format: String,
     policy_filter: Vec<String>,
     dry_run: bool,
     max_prs: usize,
+    no_color: bool,
+    fail_on: Severity,
 ) -> Result<ExitCode> {
     let sources = paths_to_sources(&config_paths);
     let mut config = load_config(&sources).context("failed to load config")?;
@@ -256,65 +274,31 @@ fn run_apply(
     }
 
     let provider = registry::create_provider(&config.provider)?;
+    let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
     let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules))?;
     let apply_report = rt.block_on(execute(&report, &config, provider.as_ref(), dry_run, max_prs))?;
 
-    print_apply_summary(&apply_report, dry_run);
-    Ok(ExitCode::SUCCESS)
-}
+    let output = formatter.format_apply(&apply_report)?;
+    if !output.is_empty() {
+        println!("{output}");
+    }
 
-fn print_apply_summary(report: &ApplyReport, dry_run: bool) {
-    let prefix = if dry_run { "[dry-run] " } else { "" };
+    let has_failure = apply_report.report.results.iter().any(|pr| {
+        pr.severity >= fail_on
+            && pr.repo_results.iter().any(|rr| {
+                matches!(
+                    rr.outcome,
+                    RepoOutcome::Fail { .. } | RepoOutcome::Error { .. }
+                )
+            })
+    });
 
-    let created = report
-        .prs_created
-        .iter()
-        .filter(|a| a.action == PrActionKind::Created)
-        .count();
-    let would_create = report
-        .prs_created
-        .iter()
-        .filter(|a| a.action == PrActionKind::DryRun)
-        .count();
-    let updated = report
-        .prs_updated
-        .iter()
-        .filter(|a| a.action == PrActionKind::Updated)
-        .count();
-    let would_update = report
-        .prs_updated
-        .iter()
-        .filter(|a| a.action == PrActionKind::DryRun)
-        .count();
-    let skipped = report.prs_skipped.len();
-    let limited = report.prs_limited;
-
-    if dry_run {
-        println!(
-            "{prefix}Would create {would_create} PR(s), would update {would_update} PR(s), {skipped} skipped, {limited} limited by --max-prs"
-        );
-        for action in &report.prs_created {
-            println!("  create: {} ({})", action.repo_name, action.branch);
-        }
-        for action in &report.prs_updated {
-            println!("  update: {} ({})", action.repo_name, action.branch);
-        }
+    if has_failure {
+        Ok(ExitCode::from(1))
     } else {
-        println!(
-            "{prefix}Created {created} PR(s), updated {updated} PR(s), {skipped} skipped, {limited} limited by --max-prs"
-        );
-        for action in &report.prs_created {
-            if let Some(pr) = &action.pr {
-                println!("  created: {} — {}", action.repo_name, pr.url);
-            }
-        }
-        for action in &report.prs_updated {
-            if let Some(pr) = &action.pr {
-                println!("  updated: {} — {}", action.repo_name, pr.url);
-            }
-        }
+        Ok(ExitCode::SUCCESS)
     }
 }
 

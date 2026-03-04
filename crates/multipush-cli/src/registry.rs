@@ -4,7 +4,7 @@ use multipush_core::config::{PolicyConfig, ProviderConfig, ProviderType};
 use multipush_core::formatter::Formatter;
 use multipush_core::provider::Provider;
 use multipush_core::rule::Rule;
-use multipush_formatters::TableFormatter;
+use multipush_formatters::{MarkdownFormatter, TableFormatter};
 use multipush_provider_github::GitHubProvider;
 
 pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn Provider>> {
@@ -31,6 +31,7 @@ pub fn create_formatter(format: &str, no_color: bool) -> Result<Box<dyn Formatte
             let color = !no_color;
             Ok(Box::new(TableFormatter::with_color(color)))
         }
+        "markdown" => Ok(Box::new(MarkdownFormatter::new())),
         other => bail!("unknown format: {other}"),
     }
 }

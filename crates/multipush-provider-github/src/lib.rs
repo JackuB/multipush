@@ -523,9 +523,12 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    // Guards env-var-mutating tests so they don't race each other.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_resolve_token_from_env() {
-        // Use a unique env var name to avoid conflicts with parallel tests
+        let _lock = ENV_MUTEX.lock().unwrap();
         std::env::set_var("GITHUB_TOKEN", "ghp_test123");
         let result = resolve_token("${GITHUB_TOKEN}");
         assert_eq!(result.unwrap(), "ghp_test123");
@@ -547,6 +550,7 @@ mod tests {
 
     #[test]
     fn test_resolve_token_missing_env_fails() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         std::env::remove_var("GITHUB_TOKEN");
         let result = resolve_token("${GITHUB_TOKEN}");
         assert!(result.is_err());
