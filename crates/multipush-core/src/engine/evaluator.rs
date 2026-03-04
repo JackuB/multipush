@@ -96,6 +96,7 @@ async fn evaluate_repo(
     let outcome = aggregate_outcomes(&outcomes);
     RepoResult {
         repo_name: repo.full_name.clone(),
+        default_branch: repo.default_branch.clone(),
         outcome,
     }
 }
@@ -106,6 +107,7 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
     let mut has_fail = false;
     let mut has_skip = false;
     let mut details = Vec::new();
+    let mut remediations = Vec::new();
 
     for o in outcomes {
         match o {
@@ -113,9 +115,15 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
                 has_error = true;
                 details.push(message.clone());
             }
-            RuleResult::Fail { detail, .. } => {
+            RuleResult::Fail {
+                detail,
+                remediation,
+            } => {
                 has_fail = true;
                 details.push(detail.clone());
+                if let Some(r) = remediation {
+                    remediations.push(r.clone());
+                }
             }
             RuleResult::Skip { reason } => {
                 has_skip = true;
@@ -132,7 +140,10 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
     if has_error {
         RepoOutcome::Error { message: combined }
     } else if has_fail {
-        RepoOutcome::Fail { detail: combined }
+        RepoOutcome::Fail {
+            detail: combined,
+            remediations,
+        }
     } else if has_skip {
         RepoOutcome::Skip { reason: combined }
     } else {

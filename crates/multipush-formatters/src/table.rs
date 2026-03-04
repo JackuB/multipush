@@ -60,7 +60,7 @@ impl TableFormatter {
     fn format_detail(outcome: &RepoOutcome) -> &str {
         match outcome {
             RepoOutcome::Pass { detail } => detail,
-            RepoOutcome::Fail { detail } => detail,
+            RepoOutcome::Fail { detail, .. } => detail,
             RepoOutcome::Skip { reason } => reason,
             RepoOutcome::Error { message } => message,
         }
@@ -147,24 +147,29 @@ mod tests {
                 repo_results: vec![
                     RepoResult {
                         repo_name: "org/alpha".to_string(),
+                        default_branch: "main".to_string(),
                         outcome: RepoOutcome::Pass {
                             detail: "File LICENSE exists".to_string(),
                         },
                     },
                     RepoResult {
                         repo_name: "org/beta".to_string(),
+                        default_branch: "main".to_string(),
                         outcome: RepoOutcome::Fail {
                             detail: "File LICENSE does not exist".to_string(),
+                            remediations: vec![],
                         },
                     },
                     RepoResult {
                         repo_name: "org/gamma".to_string(),
+                        default_branch: "main".to_string(),
                         outcome: RepoOutcome::Skip {
                             reason: "Repo is archived".to_string(),
                         },
                     },
                     RepoResult {
                         repo_name: "org/delta".to_string(),
+                        default_branch: "main".to_string(),
                         outcome: RepoOutcome::Error {
                             message: "API rate limit".to_string(),
                         },
@@ -203,6 +208,7 @@ mod tests {
                     severity: Severity::Warning,
                     repo_results: vec![RepoResult {
                         repo_name: "org/one".to_string(),
+                        default_branch: "main".to_string(),
                         outcome: RepoOutcome::Pass {
                             detail: "ok".to_string(),
                         },
@@ -214,8 +220,10 @@ mod tests {
                     severity: Severity::Error,
                     repo_results: vec![RepoResult {
                         repo_name: "org/two".to_string(),
+                        default_branch: "main".to_string(),
                         outcome: RepoOutcome::Fail {
                             detail: "not ok".to_string(),
+                            remediations: vec![],
                         },
                     }],
                 },

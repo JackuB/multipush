@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{FileChange, Repo};
 use crate::provider::Provider;
 use crate::Result;
@@ -21,7 +23,7 @@ pub enum RuleResult {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Remediation {
     pub description: String,
     pub changes: Vec<FileChange>,

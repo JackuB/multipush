@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use tracing::error;
 
 use multipush_core::config::{load_config, ConfigSource};
-use multipush_core::engine::evaluate;
+use multipush_core::engine::{evaluate, execute, ApplyReport, PrActionKind};
 use multipush_core::formatter::RepoOutcome;
 use multipush_core::model::Severity;
 
@@ -57,6 +57,33 @@ enum Command {
         /// Config file or directory (repeatable)
         #[arg(short, long)]
         config: Vec<PathBuf>,
+
+        /// Increase verbosity (-v = debug, -vv = trace)
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbose: u8,
+
+        /// Suppress output except errors
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// Apply remediations by creating/updating PRs
+    Apply {
+        /// Config file or directory (repeatable)
+        #[arg(short, long)]
+        config: Vec<PathBuf>,
+
+        /// Run only named policies (repeatable)
+        #[arg(short, long)]
+        policy: Vec<String>,
+
+        /// Preview changes without creating PRs
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Maximum number of PRs to create
+        #[arg(long, default_value = "10")]
+        max_prs: usize,
 
         /// Increase verbosity (-v = debug, -vv = trace)
         #[arg(short, long, action = clap::ArgAction::Count)]
@@ -127,6 +154,24 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Apply {
+            config,
+            policy,
+            dry_run,
+            max_prs,
+            verbose,
+            quiet,
+        } => {
+            init_tracing(verbose, quiet);
+
+            match run_apply(config, policy, dry_run, max_prs) {
+                Ok(code) => code,
+                Err(e) => {
+                    error!("{e:#}");
+                    ExitCode::from(2)
+                }
+            }
+        }
     }
 }
 
@@ -188,6 +233,88 @@ fn run_check(
         Ok(ExitCode::from(1))
     } else {
         Ok(ExitCode::SUCCESS)
+    }
+}
+
+fn run_apply(
+    config_paths: Vec<PathBuf>,
+    policy_filter: Vec<String>,
+    dry_run: bool,
+    max_prs: usize,
+) -> Result<ExitCode> {
+    let sources = paths_to_sources(&config_paths);
+    let mut config = load_config(&sources).context("failed to load config")?;
+
+    if !policy_filter.is_empty() {
+        config.policies.retain(|p| policy_filter.contains(&p.name));
+        if config.policies.is_empty() {
+            bail!(
+                "no policies matched filter: {}",
+                policy_filter.join(", ")
+            );
+        }
+    }
+
+    let provider = registry::create_provider(&config.provider)?;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules))?;
+    let apply_report = rt.block_on(execute(&report, &config, provider.as_ref(), dry_run, max_prs))?;
+
+    print_apply_summary(&apply_report, dry_run);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn print_apply_summary(report: &ApplyReport, dry_run: bool) {
+    let prefix = if dry_run { "[dry-run] " } else { "" };
+
+    let created = report
+        .prs_created
+        .iter()
+        .filter(|a| a.action == PrActionKind::Created)
+        .count();
+    let would_create = report
+        .prs_created
+        .iter()
+        .filter(|a| a.action == PrActionKind::DryRun)
+        .count();
+    let updated = report
+        .prs_updated
+        .iter()
+        .filter(|a| a.action == PrActionKind::Updated)
+        .count();
+    let would_update = report
+        .prs_updated
+        .iter()
+        .filter(|a| a.action == PrActionKind::DryRun)
+        .count();
+    let skipped = report.prs_skipped.len();
+    let limited = report.prs_limited;
+
+    if dry_run {
+        println!(
+            "{prefix}Would create {would_create} PR(s), would update {would_update} PR(s), {skipped} skipped, {limited} limited by --max-prs"
+        );
+        for action in &report.prs_created {
+            println!("  create: {} ({})", action.repo_name, action.branch);
+        }
+        for action in &report.prs_updated {
+            println!("  update: {} ({})", action.repo_name, action.branch);
+        }
+    } else {
+        println!(
+            "{prefix}Created {created} PR(s), updated {updated} PR(s), {skipped} skipped, {limited} limited by --max-prs"
+        );
+        for action in &report.prs_created {
+            if let Some(pr) = &action.pr {
+                println!("  created: {} — {}", action.repo_name, pr.url);
+            }
+        }
+        for action in &report.prs_updated {
+            if let Some(pr) = &action.pr {
+                println!("  updated: {} — {}", action.repo_name, pr.url);
+            }
+        }
     }
 }
 
