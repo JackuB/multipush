@@ -2,3 +2,7 @@
 //!
 //! Provides table, JSON, and markdown formatters that implement the
 //! `multipush_core::formatter::Formatter` trait.
+
+mod table;
+
+pub use table::TableFormatter;

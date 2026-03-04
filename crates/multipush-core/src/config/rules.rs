@@ -23,7 +23,8 @@ pub struct EnsureFileConfig {
 pub enum EnsureFileMode {
     #[default]
     CreateIfMissing,
-    MustMatch,
+    ExactMatch,
+    Contains,
 }
 
 #[derive(Debug, Deserialize)]
