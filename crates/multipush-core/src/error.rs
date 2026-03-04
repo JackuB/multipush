@@ -5,6 +5,9 @@ pub enum CoreError {
     #[error("config error: {0}")]
     Config(String),
 
+    #[error("config validation failed:\n{}", .0.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n"))]
+    ConfigValidation(Vec<String>),
+
     #[error("provider error: {0}")]
     Provider(String),
 

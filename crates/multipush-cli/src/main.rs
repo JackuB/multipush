@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use tracing::error;
 
-use multipush_core::config::load_config;
+use multipush_core::config::{load_config, ConfigSource};
 use multipush_core::engine::evaluate;
 use multipush_core::formatter::RepoOutcome;
 use multipush_core::model::Severity;
@@ -23,9 +23,9 @@ struct Cli {
 enum Command {
     /// Evaluate policies and report compliance
     Check {
-        /// Config file path
+        /// Config file or directory (repeatable)
         #[arg(short, long)]
-        config: PathBuf,
+        config: Vec<PathBuf>,
 
         /// Output format
         #[arg(short, long, default_value = "table")]
@@ -50,6 +50,21 @@ enum Command {
         /// Exit 1 if any result >= severity
         #[arg(long, default_value = "error")]
         fail_on: Severity,
+    },
+
+    /// Validate config without connecting to providers
+    Validate {
+        /// Config file or directory (repeatable)
+        #[arg(short, long)]
+        config: Vec<PathBuf>,
+
+        /// Increase verbosity (-v = debug, -vv = trace)
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbose: u8,
+
+        /// Suppress output except errors
+        #[arg(short, long)]
+        quiet: bool,
     },
 }
 
@@ -97,18 +112,46 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Validate {
+            config,
+            verbose,
+            quiet,
+        } => {
+            init_tracing(verbose, quiet);
+
+            match run_validate(config) {
+                Ok(code) => code,
+                Err(e) => {
+                    error!("{e:#}");
+                    ExitCode::from(2)
+                }
+            }
+        }
     }
 }
 
+fn paths_to_sources(paths: &[PathBuf]) -> Vec<ConfigSource> {
+    paths
+        .iter()
+        .map(|p| {
+            if p.is_dir() {
+                ConfigSource::Directory(p.clone())
+            } else {
+                ConfigSource::FilePath(p.clone())
+            }
+        })
+        .collect()
+}
+
 fn run_check(
-    config_path: PathBuf,
+    config_paths: Vec<PathBuf>,
     format: String,
     policy_filter: Vec<String>,
     no_color: bool,
     fail_on: Severity,
 ) -> Result<ExitCode> {
-    let mut config =
-        load_config(&config_path).context("failed to load config")?;
+    let sources = paths_to_sources(&config_paths);
+    let mut config = load_config(&sources).context("failed to load config")?;
 
     if !policy_filter.is_empty() {
         config.policies.retain(|p| policy_filter.contains(&p.name));
@@ -145,5 +188,34 @@ fn run_check(
         Ok(ExitCode::from(1))
     } else {
         Ok(ExitCode::SUCCESS)
+    }
+}
+
+fn run_validate(config_paths: Vec<PathBuf>) -> Result<ExitCode> {
+    let sources = paths_to_sources(&config_paths);
+    match load_config(&sources) {
+        Ok(config) => {
+            let policy_count = config.policies.len();
+            let rule_count: usize = config.policies.iter().map(|p| p.rules.len()).sum();
+            let provider_type = format!("{:?}", config.provider.provider_type).to_lowercase();
+            println!(
+                "Config is valid: {} {}, {} {}, provider: {}, org: {}",
+                policy_count,
+                if policy_count == 1 {
+                    "policy"
+                } else {
+                    "policies"
+                },
+                rule_count,
+                if rule_count == 1 { "rule" } else { "rules" },
+                provider_type,
+                config.provider.org,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            error!("{e}");
+            Ok(ExitCode::from(1))
+        }
     }
 }

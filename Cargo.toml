@@ -37,6 +37,9 @@ clap = { version = "4", features = ["derive"] }
 globset = "0.4"
 regex = "1"
 
+# Filesystem
+home = "0.5"
+
 # GitHub
 octocrab = "0.41"
 base64 = "0.22"
