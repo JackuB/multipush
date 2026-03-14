@@ -1,0 +1,20 @@
+name: codeowners
+description: "Ensure every repository has a CODEOWNERS file"
+params:
+  default_owner:
+    type: string
+    required: true
+    description: "Default code owner (e.g. @my-team)"
+  mode:
+    type: string
+    required: false
+    default: create_if_missing
+    description: "File ensure mode"
+    enum:
+      - create_if_missing
+      - exact_match
+rules:
+  - !ensure_file
+    path: CODEOWNERS
+    content: "* {{ default_owner }}\n"
+    mode: "{{ mode }}"

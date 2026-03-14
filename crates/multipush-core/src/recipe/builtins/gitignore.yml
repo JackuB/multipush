@@ -1,0 +1,62 @@
+name: gitignore
+description: "Ensure every repository has a .gitignore file"
+params:
+  template:
+    type: string
+    required: true
+    description: "Gitignore template"
+    enum:
+      - node
+      - rust
+      - python
+      - java
+      - go
+lookups:
+  template:
+    node: |
+      node_modules/
+      dist/
+      build/
+      .env
+      .env.local
+      *.log
+      npm-debug.log*
+      .DS_Store
+      coverage/
+    rust: |
+      /target
+      **/*.rs.bk
+    python: |
+      __pycache__/
+      *.py[cod]
+      *$py.class
+      *.egg-info/
+      dist/
+      build/
+      .env
+      .venv/
+      venv/
+    java: |
+      *.class
+      *.jar
+      *.war
+      *.ear
+      target/
+      .gradle/
+      build/
+      .idea/
+      *.iml
+    go: |
+      /vendor/
+      *.exe
+      *.exe~
+      *.dll
+      *.so
+      *.dylib
+      *.test
+      *.out
+rules:
+  - !ensure_file
+    path: .gitignore
+    content: |
+      {{ template }}

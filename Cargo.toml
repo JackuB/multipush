@@ -36,6 +36,7 @@ clap = { version = "4", features = ["derive"] }
 # Pattern matching
 globset = "0.4"
 regex = "1"
+indexmap = "2"
 
 # Filesystem
 home = "0.5"

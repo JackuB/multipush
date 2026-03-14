@@ -6,6 +6,8 @@ use serde_yaml_ng::{Mapping, Value};
 
 use crate::config::RootConfig;
 use crate::error::CoreError;
+use crate::recipe::builtin::builtin_recipes;
+use crate::recipe::Recipe;
 use crate::Result;
 
 /// Where a config fragment comes from.
@@ -36,7 +38,8 @@ pub fn load_config(sources: &[ConfigSource]) -> Result<RootConfig> {
     if layers.is_empty() {
         return Err(CoreError::Config("no configuration found".into()));
     }
-    let merged = merge_layers(layers);
+    let mut merged = merge_layers(layers);
+    expand_recipes(&mut merged)?;
     let config: RootConfig = serde_yaml_ng::from_value(merged).map_err(|e| {
         let msg = e.to_string();
         let enhanced = enhance_deser_error(&msg);
@@ -208,10 +211,12 @@ fn dedup_policies(merged: &mut Value) {
 
     // Track name -> last index, warn on duplicates.
     let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut has_duplicates = false;
     for (i, policy) in policies.iter().enumerate() {
         if let Value::Mapping(m) = policy {
             if let Some(Value::String(name)) = m.get(Value::String("name".to_string())) {
                 if let Some(_prev) = seen.insert(name.clone(), i) {
+                    has_duplicates = true;
                     tracing::warn!(
                         policy = %name,
                         "duplicate policy name, later definition wins"
@@ -221,15 +226,143 @@ fn dedup_policies(merged: &mut Value) {
         }
     }
 
-    if seen.len() < policies.len() {
-        let keep_indices: HashSet<usize> = seen.values().copied().collect();
+    if has_duplicates {
+        let keep_named: HashSet<usize> = seen.values().copied().collect();
+        let name_key = Value::String("name".to_string());
         let mut i = 0;
-        policies.retain(|_| {
-            let keep = keep_indices.contains(&i);
+        policies.retain(|policy| {
+            let idx = i;
             i += 1;
-            keep
+            let is_named =
+                matches!(policy, Value::Mapping(m) if m.contains_key(&name_key));
+            if is_named {
+                keep_named.contains(&idx)
+            } else {
+                true
+            }
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Recipe expansion
+// ---------------------------------------------------------------------------
+
+fn expand_recipes(merged: &mut Value) -> Result<()> {
+    let recipes = builtin_recipes()?;
+    let recipe_map: HashMap<String, Recipe> = recipes
+        .into_iter()
+        .map(|r| (r.name.clone(), r))
+        .collect();
+
+    let policies = match merged {
+        Value::Mapping(m) => match m.get_mut(Value::String("policies".into())) {
+            Some(Value::Sequence(seq)) => seq,
+            _ => return Ok(()),
+        },
+        _ => return Ok(()),
+    };
+
+    let mut expanded = Vec::new();
+    for policy_val in policies.iter() {
+        let policy_map = match policy_val.as_mapping() {
+            Some(m) => m,
+            None => {
+                expanded.push(policy_val.clone());
+                continue;
+            }
+        };
+
+        // Check if this policy uses a recipe
+        let recipe_name = match policy_map.get(Value::String("recipe".into())) {
+            Some(Value::String(name)) => name.clone(),
+            Some(_) => {
+                return Err(CoreError::Recipe(
+                    "'recipe' field must be a string".into(),
+                ))
+            }
+            None => {
+                expanded.push(policy_val.clone());
+                continue;
+            }
+        };
+
+        let recipe = recipe_map.get(&recipe_name).ok_or_else(|| {
+            let mut available: Vec<&str> = recipe_map.keys().map(|s| s.as_str()).collect();
+            available.sort();
+            CoreError::Recipe(format!(
+                "unknown recipe '{recipe_name}'. Available recipes: {}",
+                available.join(", ")
+            ))
+        })?;
+
+        // Validate targets is provided
+        if !policy_map.contains_key(Value::String("targets".into())) {
+            return Err(CoreError::Recipe(format!(
+                "recipe '{recipe_name}' policy must include 'targets'"
+            )));
+        }
+
+        // Extract params
+        let params = extract_recipe_params(policy_map)?;
+
+        // Expand recipe
+        let mut expanded_val = recipe.expand(&params)?;
+
+        // Merge user overrides (targets, severity, name, description)
+        if let Value::Mapping(ref mut exp_map) = expanded_val {
+            for key in &["targets", "severity", "name", "description"] {
+                let k = Value::String((*key).to_string());
+                if let Some(user_val) = policy_map.get(&k) {
+                    exp_map.insert(k, user_val.clone());
+                }
+            }
+        }
+
+        expanded.push(expanded_val);
+    }
+
+    // Replace policies with expanded versions
+    if let Value::Mapping(m) = merged {
+        m.insert(
+            Value::String("policies".into()),
+            Value::Sequence(expanded),
+        );
+    }
+
+    Ok(())
+}
+
+fn extract_recipe_params(policy_map: &Mapping) -> Result<HashMap<String, String>> {
+    let mut params = HashMap::new();
+
+    let params_val = match policy_map.get(Value::String("params".into())) {
+        Some(v) => v,
+        None => return Ok(params),
+    };
+
+    let params_map = params_val
+        .as_mapping()
+        .ok_or_else(|| CoreError::Recipe("'params' must be a mapping".into()))?;
+
+    for (key, val) in params_map {
+        let k = key
+            .as_str()
+            .ok_or_else(|| CoreError::Recipe("param key must be a string".into()))?;
+        let v = match val {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => {
+                return Err(CoreError::Recipe(format!(
+                    "param '{k}' value must be a scalar"
+                )))
+            }
+        };
+        params.insert(k.to_string(), v);
+    }
+
+    Ok(params)
 }
 
 // ---------------------------------------------------------------------------
@@ -812,5 +945,112 @@ provider:
         assert_eq!(m.get(&Value::String("a".into())), Some(&Value::Number(1.into())));
         assert_eq!(m.get(&Value::String("b".into())), Some(&Value::Number(3.into())));
         assert_eq!(m.get(&Value::String("c".into())), Some(&Value::Number(4.into())));
+    }
+
+    #[test]
+    fn recipe_expansion_in_config() {
+        let yaml = r#"
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - recipe: codeowners
+    params:
+      default_owner: "@platform-team"
+    targets:
+      repos: "test-org/*"
+"#;
+        let config = load_single(yaml).unwrap();
+        assert_eq!(config.policies.len(), 1);
+        assert_eq!(config.policies[0].name, "codeowners");
+        assert_eq!(config.policies[0].rules.len(), 1);
+
+        match &config.policies[0].rules[0] {
+            crate::config::RuleDefinition::EnsureFile(cfg) => {
+                assert_eq!(cfg.path, "CODEOWNERS");
+                assert!(cfg.content.as_ref().unwrap().contains("@platform-team"));
+            }
+            _ => panic!("expected EnsureFile rule"),
+        }
+    }
+
+    #[test]
+    fn recipe_with_name_override() {
+        let yaml = r#"
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - recipe: editorconfig
+    name: custom-editorconfig
+    severity: warning
+    targets:
+      repos: "test-org/*"
+"#;
+        let config = load_single(yaml).unwrap();
+        assert_eq!(config.policies[0].name, "custom-editorconfig");
+    }
+
+    #[test]
+    fn recipe_mixed_with_regular_policies() {
+        let yaml = r#"
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - name: require-readme
+    targets:
+      repos: "test-org/*"
+    rules:
+      - !ensure_file
+        path: README.md
+  - recipe: dependabot
+    params:
+      ecosystem: cargo
+    targets:
+      repos: "test-org/*"
+"#;
+        let config = load_single(yaml).unwrap();
+        assert_eq!(config.policies.len(), 2);
+        assert_eq!(config.policies[0].name, "require-readme");
+        assert_eq!(config.policies[1].name, "dependabot");
+    }
+
+    #[test]
+    fn recipe_unknown_name_error() {
+        let yaml = r#"
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - recipe: nonexistent
+    targets:
+      repos: "test-org/*"
+"#;
+        let err = load_single(yaml).unwrap_err();
+        assert!(err.to_string().contains("unknown recipe 'nonexistent'"));
+    }
+
+    #[test]
+    fn recipe_missing_targets_error() {
+        let yaml = r#"
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - recipe: editorconfig
+"#;
+        let err = load_single(yaml).unwrap_err();
+        assert!(err.to_string().contains("must include 'targets'"));
     }
 }

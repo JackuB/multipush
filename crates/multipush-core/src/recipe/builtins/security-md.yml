@@ -1,0 +1,20 @@
+name: security-md
+description: "Ensure every repository has a SECURITY.md file"
+params:
+  contact_email:
+    type: string
+    required: true
+    description: "Security contact email address"
+rules:
+  - !ensure_file
+    path: SECURITY.md
+    content: |
+      # Security Policy
+
+      ## Reporting a Vulnerability
+
+      If you discover a security vulnerability, please report it responsibly.
+
+      **Contact:** {{ contact_email }}
+
+      Please do not open a public issue for security vulnerabilities.

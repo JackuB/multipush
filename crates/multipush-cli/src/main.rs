@@ -11,6 +11,7 @@ use multipush_core::config::{load_config, ConfigSource};
 use multipush_core::engine::{evaluate, execute};
 use multipush_core::formatter::RepoOutcome;
 use multipush_core::model::Severity;
+use multipush_core::recipe::builtin::builtin_recipes;
 
 #[derive(Parser)]
 #[command(name = "multipush", about = "Declarative repository governance")]
@@ -63,6 +64,17 @@ enum Command {
         verbose: u8,
 
         /// Suppress output except errors
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// List available rules and recipes
+    ListRules {
+        /// Increase verbosity for more detail
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbose: u8,
+
+        /// Show only names
         #[arg(short, long)]
         quiet: bool,
     },
@@ -144,6 +156,15 @@ fn main() -> ExitCode {
             init_tracing(verbose, quiet);
 
             match run_check(config, format, policy, no_color, fail_on) {
+                Ok(code) => code,
+                Err(e) => {
+                    error!("{e:#}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Command::ListRules { verbose, quiet } => {
+            match run_list_rules(verbose, quiet) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -329,4 +350,62 @@ fn run_validate(config_paths: Vec<PathBuf>) -> Result<ExitCode> {
             Ok(ExitCode::from(1))
         }
     }
+}
+
+fn run_list_rules(verbose: u8, quiet: bool) -> Result<ExitCode> {
+    let rules = [
+        ("ensure_file", "Ensure a file exists with optional content matching"),
+        ("ensure_json_key", "Ensure a key exists in a JSON file"),
+        ("ensure_yaml_key", "Ensure a key exists in a YAML file"),
+        ("file_matches", "Check file content against a regex pattern"),
+    ];
+
+    if quiet {
+        for (name, _) in &rules {
+            println!("{name}");
+        }
+        let recipes = builtin_recipes()?;
+        for recipe in &recipes {
+            println!("{}", recipe.name);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!("Rules:");
+    for (name, desc) in &rules {
+        println!("  {name:<20}{desc}");
+    }
+
+    let recipes = builtin_recipes()?;
+    println!("\nRecipes:");
+    for recipe in &recipes {
+        println!("  {:<20}{}", recipe.name, recipe.description);
+
+        if verbose > 0 {
+            println!("    Parameters:");
+            for (name, def) in &recipe.params {
+                let req = if def.required {
+                    "required".to_string()
+                } else if let Some(d) = &def.default {
+                    format!("default: {d}")
+                } else {
+                    "optional".to_string()
+                };
+
+                let desc = def.description.as_deref().unwrap_or("");
+                let enum_hint = def
+                    .enum_values
+                    .as_ref()
+                    .map(|v| format!(" [{}]", v.join(", ")))
+                    .unwrap_or_default();
+
+                println!(
+                    "      {:<16} {:<8} {:<28} {desc}{enum_hint}",
+                    name, def.param_type, req
+                );
+            }
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
 }

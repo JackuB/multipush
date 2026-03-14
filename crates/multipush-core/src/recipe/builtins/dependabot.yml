@@ -1,0 +1,32 @@
+name: dependabot
+description: "Ensure every repository has a Dependabot configuration"
+params:
+  ecosystem:
+    type: string
+    required: true
+    description: "Package ecosystem"
+    enum:
+      - npm
+      - cargo
+      - pip
+      - maven
+      - gomod
+  schedule:
+    type: string
+    required: false
+    default: weekly
+    description: "Update check frequency"
+    enum:
+      - daily
+      - weekly
+      - monthly
+rules:
+  - !ensure_file
+    path: .github/dependabot.yml
+    content: |
+      version: 2
+      updates:
+        - package-ecosystem: "{{ ecosystem }}"
+          directory: "/"
+          schedule:
+            interval: "{{ schedule }}"

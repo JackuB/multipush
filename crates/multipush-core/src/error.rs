@@ -14,6 +14,9 @@ pub enum CoreError {
     #[error("rule evaluation error: {0}")]
     RuleEvaluation(String),
 
+    #[error("recipe error: {0}")]
+    Recipe(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

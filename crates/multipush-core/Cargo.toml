@@ -15,6 +15,7 @@ tracing = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
 home = { workspace = true }
+indexmap = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

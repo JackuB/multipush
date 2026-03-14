@@ -860,6 +860,7 @@ dependencies = [
  "futures",
  "globset",
  "home",
+ "indexmap",
  "regex",
  "serde",
  "serde_json",

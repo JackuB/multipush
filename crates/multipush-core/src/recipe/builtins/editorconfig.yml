@@ -1,0 +1,29 @@
+name: editorconfig
+description: "Ensure every repository has an .editorconfig file"
+params:
+  indent_style:
+    type: string
+    required: false
+    default: space
+    description: "Indentation style"
+    enum:
+      - space
+      - tab
+  indent_size:
+    type: string
+    required: false
+    default: "2"
+    description: "Number of spaces for indentation"
+rules:
+  - !ensure_file
+    path: .editorconfig
+    content: |
+      root = true
+
+      [*]
+      indent_style = {{ indent_style }}
+      indent_size = {{ indent_size }}
+      end_of_line = lf
+      charset = utf-8
+      trim_trailing_whitespace = true
+      insert_final_newline = true
