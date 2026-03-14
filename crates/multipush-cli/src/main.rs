@@ -36,7 +36,7 @@ enum Command {
         #[arg(short, long)]
         policy: Vec<String>,
 
-        /// Increase verbosity (-v = debug, -vv = trace)
+        /// Increase verbosity (-v = info, -vv = debug, -vvv = trace)
         #[arg(short, long, action = clap::ArgAction::Count)]
         verbose: u8,
 
@@ -47,6 +47,10 @@ enum Command {
         /// Disable colors
         #[arg(long)]
         no_color: bool,
+
+        /// Maximum concurrent repo evaluations
+        #[arg(long, default_value = "10")]
+        concurrency: usize,
 
         /// Exit 1 if any result >= severity
         #[arg(long, default_value = "error")]
@@ -59,7 +63,7 @@ enum Command {
         #[arg(short, long)]
         config: Vec<PathBuf>,
 
-        /// Increase verbosity (-v = debug, -vv = trace)
+        /// Increase verbosity (-v = info, -vv = debug, -vvv = trace)
         #[arg(short, long, action = clap::ArgAction::Count)]
         verbose: u8,
 
@@ -101,7 +105,11 @@ enum Command {
         #[arg(long, default_value = "10")]
         max_prs: usize,
 
-        /// Increase verbosity (-v = debug, -vv = trace)
+        /// Maximum concurrent repo evaluations
+        #[arg(long, default_value = "10")]
+        concurrency: usize,
+
+        /// Increase verbosity (-v = info, -vv = debug, -vvv = trace)
         #[arg(short, long, action = clap::ArgAction::Count)]
         verbose: u8,
 
@@ -126,8 +134,9 @@ fn init_tracing(verbose: u8, quiet: bool) {
         "error"
     } else {
         match verbose {
-            0 => "warn",
-            1 => "debug",
+            0 => "error",
+            1 => "info",
+            2 => "debug",
             _ => "trace",
         }
     };
@@ -151,11 +160,12 @@ fn main() -> ExitCode {
             verbose,
             quiet,
             no_color,
+            concurrency,
             fail_on,
         } => {
             init_tracing(verbose, quiet);
 
-            match run_check(config, format, policy, no_color, fail_on) {
+            match run_check(config, format, policy, no_color, concurrency, fail_on) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -193,6 +203,7 @@ fn main() -> ExitCode {
             policy,
             dry_run,
             max_prs,
+            concurrency,
             verbose,
             quiet,
             no_color,
@@ -200,7 +211,7 @@ fn main() -> ExitCode {
         } => {
             init_tracing(verbose, quiet);
 
-            match run_apply(config, format, policy, dry_run, max_prs, no_color, fail_on) {
+            match run_apply(config, format, policy, dry_run, max_prs, concurrency, no_color, fail_on) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -229,6 +240,7 @@ fn run_check(
     format: String,
     policy_filter: Vec<String>,
     no_color: bool,
+    concurrency: usize,
     fail_on: Severity,
 ) -> Result<ExitCode> {
     let sources = paths_to_sources(&config_paths);
@@ -248,7 +260,7 @@ fn run_check(
     let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules))?;
+    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules, concurrency))?;
 
     let output = formatter.format(&report)?;
     if !output.is_empty() {
@@ -272,12 +284,14 @@ fn run_check(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_apply(
     config_paths: Vec<PathBuf>,
     format: String,
     policy_filter: Vec<String>,
     dry_run: bool,
     max_prs: usize,
+    concurrency: usize,
     no_color: bool,
     fail_on: Severity,
 ) -> Result<ExitCode> {
@@ -298,7 +312,7 @@ fn run_apply(
     let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules))?;
+    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules, concurrency))?;
     let apply_report = rt.block_on(execute(&report, &config, provider.as_ref(), dry_run, max_prs))?;
 
     let output = formatter.format_apply(&apply_report)?;

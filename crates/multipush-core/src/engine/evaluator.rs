@@ -1,5 +1,5 @@
 use futures::stream::{self, StreamExt};
-use tracing::{debug, error};
+use tracing::{error, info, info_span, Instrument};
 
 use crate::config::{PolicyConfig, RootConfig};
 use crate::formatter::{PolicyReport, Report, RepoOutcome, RepoResult, Summary};
@@ -14,20 +14,22 @@ pub async fn evaluate<F>(
     config: &RootConfig,
     provider: &dyn Provider,
     rules_factory: F,
+    concurrency: usize,
 ) -> Result<Report>
 where
     F: Fn(&PolicyConfig) -> Result<Vec<Box<dyn Rule>>>,
 {
     let all_repos = provider.list_repos(&config.provider.org).await?;
-    debug!(count = all_repos.len(), "fetched repos");
+    info!(count = all_repos.len(), "fetched repos");
 
     let mut policy_reports = Vec::new();
     let mut summary = Summary::default();
 
     for policy in &config.policies {
+        let _policy_span = info_span!("policy", name = %policy.name).entered();
         let rules = rules_factory(policy)?;
         let targeted = filter_repos(&all_repos, &policy.targets)?;
-        debug!(
+        info!(
             policy = %policy.name,
             targeted = targeted.len(),
             rules = rules.len(),
@@ -36,11 +38,13 @@ where
 
         let repo_results: Vec<RepoResult> = stream::iter(targeted.iter().map(|repo| {
             let rules = &rules;
+            let span = info_span!("repo", name = %repo.full_name);
             async move {
                 evaluate_repo(provider, repo, rules).await
             }
+            .instrument(span)
         }))
-        .buffer_unordered(10)
+        .buffer_unordered(concurrency)
         .collect()
         .await;
 
@@ -339,7 +343,7 @@ mod tests {
             })],
         }]);
 
-        let report = evaluate(&config, &provider, simple_factory).await.unwrap();
+        let report = evaluate(&config, &provider, simple_factory, 10).await.unwrap();
         assert_eq!(report.summary.passing, 1);
         assert_eq!(report.summary.failing, 0);
     }
@@ -366,7 +370,7 @@ mod tests {
             })],
         }]);
 
-        let report = evaluate(&config, &provider, simple_factory).await.unwrap();
+        let report = evaluate(&config, &provider, simple_factory, 10).await.unwrap();
         assert_eq!(report.summary.passing, 0);
         assert_eq!(report.summary.failing, 1);
     }

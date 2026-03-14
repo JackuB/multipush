@@ -12,6 +12,9 @@ use multipush_core::model::{
 use multipush_core::provider::Provider;
 use octocrab::Octocrab;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{debug_span, Instrument};
 
 // --- Git Trees API structs (not covered by octocrab typed API) ---
 
@@ -44,9 +47,15 @@ struct UpdateRefRequest {
     force: bool,
 }
 
+struct RateLimitState {
+    remaining: Option<u64>,
+    reset: Option<u64>,
+}
+
 pub struct GitHubProvider {
     client: Octocrab,
     org: String,
+    rate_limit: Arc<Mutex<RateLimitState>>,
 }
 
 impl GitHubProvider {
@@ -68,6 +77,10 @@ impl GitHubProvider {
         Ok(Self {
             client,
             org: config.org.clone(),
+            rate_limit: Arc::new(Mutex::new(RateLimitState {
+                remaining: None,
+                reset: None,
+            })),
         })
     }
 
@@ -173,6 +186,7 @@ impl GitHubProvider {
         changes: &[FileChange],
     ) -> multipush_core::Result<()> {
         let branch_sha = self.get_branch_sha(repo, branch).await?;
+        tracing::trace!(repo = %repo.full_name, branch = branch, files = changes.len(), "pushing changes via tree API");
 
         // Get the commit's tree SHA
         let commit: serde_json::Value = self
@@ -251,6 +265,7 @@ impl GitHubProvider {
         let new_commit_sha = new_commit["sha"]
             .as_str()
             .ok_or_else(|| CoreError::Provider("Missing SHA in new commit".into()))?;
+        tracing::trace!(commit_sha = new_commit_sha, tree_sha = %tree_response.sha, "created commit via tree API");
 
         // Update branch ref
         let _: serde_json::Value = self
@@ -267,6 +282,49 @@ impl GitHubProvider {
             )
             .await
             .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn check_rate_limit(&self) -> multipush_core::Result<()> {
+        let response: serde_json::Value = self
+            .client
+            .get("/rate_limit", None::<&()>)
+            .await
+            .map_err(|e| CoreError::Provider(format!("failed to check rate limit: {e}")))?;
+
+        let remaining = response["resources"]["core"]["remaining"]
+            .as_u64()
+            .unwrap_or(5000);
+        let reset = response["resources"]["core"]["reset"]
+            .as_u64()
+            .unwrap_or(0);
+
+        let mut state = self.rate_limit.lock().await;
+        state.remaining = Some(remaining);
+        state.reset = Some(reset);
+
+        if remaining == 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if reset > now {
+                let wait_secs = reset - now;
+                tracing::warn!(
+                    remaining = 0,
+                    reset_unix = reset,
+                    wait_secs = wait_secs,
+                    "GitHub API rate limit exhausted (0 remaining). Resets in {wait_secs}s. Reduce --concurrency or wait."
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(wait_secs + 1)).await;
+            }
+        } else if remaining < 100 {
+            tracing::warn!(
+                remaining = remaining,
+                "GitHub API rate limit running low ({remaining} remaining)"
+            );
+        }
 
         Ok(())
     }
@@ -364,35 +422,41 @@ impl Provider for GitHubProvider {
     }
 
     async fn list_repos(&self, org: &str) -> multipush_core::Result<Vec<Repo>> {
-        let mut page = self
-            .client
-            .orgs(org)
-            .list_repos()
-            .per_page(100)
-            .send()
-            .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+        async {
+            self.check_rate_limit().await?;
 
-        let mut repos = page.take_items();
+            let mut page = self
+                .client
+                .orgs(org)
+                .list_repos()
+                .per_page(100)
+                .send()
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
 
-        while let Some(next_page) = self
-            .client
-            .get_page::<octocrab::models::Repository>(&page.next)
-            .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?
-        {
-            page = next_page;
-            repos.extend(page.take_items());
+            let mut repos = page.take_items();
+
+            while let Some(next_page) = self
+                .client
+                .get_page::<octocrab::models::Repository>(&page.next)
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?
+            {
+                page = next_page;
+                repos.extend(page.take_items());
+            }
+
+            let result: Vec<Repo> = repos
+                .into_iter()
+                .map(|r| map_repo(r, org))
+                .collect();
+
+            tracing::debug!(count = result.len(), org = org, "listed repos");
+
+            Ok(result)
         }
-
-        let result: Vec<Repo> = repos
-            .into_iter()
-            .map(|r| map_repo(r, org))
-            .collect();
-
-        tracing::debug!("Listed {} repos for org {}", result.len(), org);
-
-        Ok(result)
+        .instrument(debug_span!("api", method = "list_repos", org = org))
+        .await
     }
 
     async fn get_file(
@@ -401,40 +465,44 @@ impl Provider for GitHubProvider {
         path: &str,
         git_ref: &str,
     ) -> multipush_core::Result<Option<FileContent>> {
-        let result = self
-            .client
-            .repos(&repo.owner, &repo.name)
-            .get_content()
-            .path(path)
-            .r#ref(git_ref)
-            .send()
-            .await;
+        async {
+            let result = self
+                .client
+                .repos(&repo.owner, &repo.name)
+                .get_content()
+                .path(path)
+                .r#ref(git_ref)
+                .send()
+                .await;
 
-        match result {
-            Ok(content) => {
-                let item = content
-                    .items
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| CoreError::Provider("No content items returned".into()))?;
+            match result {
+                Ok(content) => {
+                    let item = content
+                        .items
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| CoreError::Provider("No content items returned".into()))?;
 
-                let decoded = item.decoded_content().ok_or_else(|| {
-                    CoreError::Provider("Failed to decode file content".into())
-                })?;
+                    let decoded = item.decoded_content().ok_or_else(|| {
+                        CoreError::Provider("Failed to decode file content".into())
+                    })?;
 
-                Ok(Some(FileContent {
-                    path: path.to_string(),
-                    content: decoded,
-                    sha: item.sha,
-                }))
+                    Ok(Some(FileContent {
+                        path: path.to_string(),
+                        content: decoded,
+                        sha: item.sha,
+                    }))
+                }
+                Err(octocrab::Error::GitHub { source, .. })
+                    if source.status_code.as_u16() == 404 =>
+                {
+                    Ok(None)
+                }
+                Err(e) => Err(CoreError::Provider(e.to_string())),
             }
-            Err(octocrab::Error::GitHub { source, .. })
-                if source.status_code.as_u16() == 404 =>
-            {
-                Ok(None)
-            }
-            Err(e) => Err(CoreError::Provider(e.to_string())),
         }
+        .instrument(debug_span!("api", method = "get_file", repo = %repo.full_name, path = path))
+        .await
     }
 
     async fn get_repo_settings(&self, _repo: &Repo) -> multipush_core::Result<RepoSettings> {
@@ -446,19 +514,23 @@ impl Provider for GitHubProvider {
         repo: &Repo,
         head_branch: &str,
     ) -> multipush_core::Result<Option<PullRequest>> {
-        let head = format!("{}:{}", self.org, head_branch);
-        let page = self
-            .client
-            .pulls(&repo.owner, &repo.name)
-            .list()
-            .state(octocrab::params::State::Open)
-            .head(&head)
-            .per_page(1)
-            .send()
-            .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+        async {
+            let head = format!("{}:{}", self.org, head_branch);
+            let page = self
+                .client
+                .pulls(&repo.owner, &repo.name)
+                .list()
+                .state(octocrab::params::State::Open)
+                .head(&head)
+                .per_page(1)
+                .send()
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
 
-        Ok(page.items.first().map(map_octocrab_pr))
+            Ok(page.items.first().map(map_octocrab_pr))
+        }
+        .instrument(debug_span!("api", method = "find_open_pr", repo = %repo.full_name, branch = head_branch))
+        .await
     }
 
     async fn create_pr(
@@ -470,28 +542,34 @@ impl Provider for GitHubProvider {
         body: &str,
         changes: Vec<FileChange>,
     ) -> multipush_core::Result<PullRequest> {
-        let base_sha = self.get_branch_sha(repo, base).await?;
-        self.create_or_reuse_branch(repo, branch, &base_sha)
-            .await?;
+        async {
+            self.check_rate_limit().await?;
 
-        if changes.len() >= 2 {
-            self.push_changes_tree_api(repo, branch, &changes).await?;
-        } else {
-            for change in &changes {
-                self.push_single_file_change(repo, branch, change).await?;
+            let base_sha = self.get_branch_sha(repo, base).await?;
+            self.create_or_reuse_branch(repo, branch, &base_sha)
+                .await?;
+
+            if changes.len() >= 2 {
+                self.push_changes_tree_api(repo, branch, &changes).await?;
+            } else {
+                for change in &changes {
+                    self.push_single_file_change(repo, branch, change).await?;
+                }
             }
+
+            let pr = self
+                .client
+                .pulls(&repo.owner, &repo.name)
+                .create(title, branch, base)
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(map_octocrab_pr(&pr))
         }
-
-        let pr = self
-            .client
-            .pulls(&repo.owner, &repo.name)
-            .create(title, branch, base)
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
-
-        Ok(map_octocrab_pr(&pr))
+        .instrument(debug_span!("api", method = "create_pr", repo = %repo.full_name, branch = branch))
+        .await
     }
 
     async fn update_pr(
@@ -500,17 +578,23 @@ impl Provider for GitHubProvider {
         pr: &PullRequest,
         changes: Vec<FileChange>,
     ) -> multipush_core::Result<PullRequest> {
-        if changes.len() >= 2 {
-            self.push_changes_tree_api(repo, &pr.head_branch, &changes)
-                .await?;
-        } else {
-            for change in &changes {
-                self.push_single_file_change(repo, &pr.head_branch, change)
-                    .await?;
-            }
-        }
+        async {
+            self.check_rate_limit().await?;
 
-        Ok(pr.clone())
+            if changes.len() >= 2 {
+                self.push_changes_tree_api(repo, &pr.head_branch, &changes)
+                    .await?;
+            } else {
+                for change in &changes {
+                    self.push_single_file_change(repo, &pr.head_branch, change)
+                        .await?;
+                }
+            }
+
+            Ok(pr.clone())
+        }
+        .instrument(debug_span!("api", method = "update_pr", repo = %repo.full_name, pr = pr.number))
+        .await
     }
 }
 

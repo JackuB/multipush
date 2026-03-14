@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use crate::config::{ExistingPrStrategy, RootConfig};
 use crate::formatter::{Report, RepoOutcome};
@@ -15,6 +15,7 @@ pub struct ApplyReport {
     pub prs_created: Vec<PrAction>,
     pub prs_updated: Vec<PrAction>,
     pub prs_skipped: Vec<PrAction>,
+    pub prs_errored: Vec<PrAction>,
     pub prs_limited: usize,
 }
 
@@ -25,6 +26,7 @@ pub struct PrAction {
     pub branch: String,
     pub pr: Option<PullRequest>,
     pub action: PrActionKind,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub enum PrActionKind {
     Updated,
     Skipped,
     DryRun,
+    Error,
 }
 
 pub async fn execute(
@@ -58,6 +61,7 @@ pub async fn execute(
     let mut prs_created = Vec::new();
     let mut prs_updated = Vec::new();
     let mut prs_skipped = Vec::new();
+    let mut prs_errored = Vec::new();
     let mut pr_counter: usize = 0;
     let mut prs_limited: usize = 0;
 
@@ -74,6 +78,7 @@ pub async fn execute(
 
             let branch = format!("{pr_prefix}/{policy_name}");
             let repo = build_repo(&repo_result.repo_name, &repo_result.default_branch);
+            let _span = info_span!("apply_repo", repo = %repo.full_name, policy = %policy_name).entered();
 
             debug!(
                 repo = %repo.full_name,
@@ -83,7 +88,26 @@ pub async fn execute(
                 "processing failing repo"
             );
 
-            let existing = provider.find_open_pr(&repo, &branch).await?;
+            let existing = match provider.find_open_pr(&repo, &branch).await {
+                Ok(pr) => pr,
+                Err(e) => {
+                    error!(
+                        repo = %repo.full_name,
+                        policy = %policy_name,
+                        error = %e,
+                        "failed to check for existing PR"
+                    );
+                    prs_errored.push(PrAction {
+                        repo_name: repo.full_name.clone(),
+                        policy_name: policy_name.clone(),
+                        branch: branch.clone(),
+                        pr: None,
+                        action: PrActionKind::Error,
+                        error: Some(e.to_string()),
+                    });
+                    continue;
+                }
+            };
 
             if let Some(ref pr) = existing {
                 match existing_pr_strategy {
@@ -99,6 +123,7 @@ pub async fn execute(
                             branch: branch.clone(),
                             pr: Some(pr.clone()),
                             action: PrActionKind::Skipped,
+                            error: None,
                         });
                         continue;
                     }
@@ -115,22 +140,43 @@ pub async fn execute(
                                 branch: branch.clone(),
                                 pr: Some(pr.clone()),
                                 action: PrActionKind::DryRun,
+                                error: None,
                             });
                         } else {
                             let changes = collect_changes(remediations);
-                            let updated_pr = provider.update_pr(&repo, pr, changes).await?;
-                            info!(
-                                repo = %repo.full_name,
-                                pr = updated_pr.number,
-                                "updated existing PR"
-                            );
-                            prs_updated.push(PrAction {
-                                repo_name: repo.full_name.clone(),
-                                policy_name: policy_name.clone(),
-                                branch: branch.clone(),
-                                pr: Some(updated_pr),
-                                action: PrActionKind::Updated,
-                            });
+                            match provider.update_pr(&repo, pr, changes).await {
+                                Ok(updated_pr) => {
+                                    info!(
+                                        repo = %repo.full_name,
+                                        pr = updated_pr.number,
+                                        "updated existing PR"
+                                    );
+                                    prs_updated.push(PrAction {
+                                        repo_name: repo.full_name.clone(),
+                                        policy_name: policy_name.clone(),
+                                        branch: branch.clone(),
+                                        pr: Some(updated_pr),
+                                        action: PrActionKind::Updated,
+                                        error: None,
+                                    });
+                                }
+                                Err(e) => {
+                                    error!(
+                                        repo = %repo.full_name,
+                                        policy = %policy_name,
+                                        error = %e,
+                                        "failed to update PR"
+                                    );
+                                    prs_errored.push(PrAction {
+                                        repo_name: repo.full_name.clone(),
+                                        policy_name: policy_name.clone(),
+                                        branch: branch.clone(),
+                                        pr: Some(pr.clone()),
+                                        action: PrActionKind::Error,
+                                        error: Some(e.to_string()),
+                                    });
+                                }
+                            }
                         }
                         continue;
                     }
@@ -172,10 +218,11 @@ pub async fn execute(
                     branch: branch.clone(),
                     pr: None,
                     action: PrActionKind::DryRun,
+                    error: None,
                 });
             } else {
                 let changes = collect_changes(remediations);
-                let pr = provider
+                match provider
                     .create_pr(
                         &repo,
                         &branch,
@@ -184,20 +231,41 @@ pub async fn execute(
                         &body,
                         changes,
                     )
-                    .await?;
-                info!(
-                    repo = %repo.full_name,
-                    pr = pr.number,
-                    url = %pr.url,
-                    "created PR"
-                );
-                prs_created.push(PrAction {
-                    repo_name: repo.full_name.clone(),
-                    policy_name: policy_name.clone(),
-                    branch: branch.clone(),
-                    pr: Some(pr),
-                    action: PrActionKind::Created,
-                });
+                    .await
+                {
+                    Ok(pr) => {
+                        info!(
+                            repo = %repo.full_name,
+                            pr = pr.number,
+                            url = %pr.url,
+                            "created PR"
+                        );
+                        prs_created.push(PrAction {
+                            repo_name: repo.full_name.clone(),
+                            policy_name: policy_name.clone(),
+                            branch: branch.clone(),
+                            pr: Some(pr),
+                            action: PrActionKind::Created,
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        error!(
+                            repo = %repo.full_name,
+                            policy = %policy_name,
+                            error = %e,
+                            "failed to create PR"
+                        );
+                        prs_errored.push(PrAction {
+                            repo_name: repo.full_name.clone(),
+                            policy_name: policy_name.clone(),
+                            branch: branch.clone(),
+                            pr: None,
+                            action: PrActionKind::Error,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
             }
 
             pr_counter += 1;
@@ -209,6 +277,7 @@ pub async fn execute(
         prs_created,
         prs_updated,
         prs_skipped,
+        prs_errored,
         prs_limited,
     })
 }
@@ -532,6 +601,57 @@ mod tests {
         assert_eq!(result.prs_created.len(), 0);
         assert_eq!(result.prs_limited, 0);
         assert_eq!(provider.create_pr_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn create_pr_error_continues_execution() {
+        use crate::error::CoreError;
+
+        struct FailingMockProvider {
+            fail_repo: String,
+            create_pr_calls: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl Provider for FailingMockProvider {
+            fn name(&self) -> &str { "mock" }
+            async fn list_repos(&self, _org: &str) -> Result<Vec<Repo>> { Ok(vec![]) }
+            async fn get_file(&self, _repo: &Repo, _path: &str, _git_ref: &str) -> Result<Option<FileContent>> { Ok(None) }
+            async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> { unimplemented!() }
+            async fn find_open_pr(&self, _repo: &Repo, _head: &str) -> Result<Option<PullRequest>> { Ok(None) }
+            async fn create_pr(
+                &self, repo: &Repo, branch: &str, _base: &str, title: &str, _body: &str, _changes: Vec<FileChange>,
+            ) -> Result<PullRequest> {
+                if repo.full_name == self.fail_repo {
+                    return Err(CoreError::Provider("API error".into()));
+                }
+                let n = self.create_pr_calls.fetch_add(1, Ordering::SeqCst) as u64 + 1;
+                Ok(PullRequest {
+                    number: n, title: title.to_string(), head_branch: branch.to_string(),
+                    url: format!("https://github.com/{}/pull/{n}", repo.full_name),
+                    state: PrState::Open,
+                })
+            }
+            async fn update_pr(&self, _repo: &Repo, pr: &PullRequest, _changes: Vec<FileChange>) -> Result<PullRequest> {
+                Ok(pr.clone())
+            }
+        }
+
+        let provider = FailingMockProvider {
+            fail_repo: "org/alpha".to_string(),
+            create_pr_calls: AtomicUsize::new(0),
+        };
+        let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
+        let config = default_config();
+
+        let result = execute(&report, &config, &provider, false, 10).await.unwrap();
+
+        assert_eq!(result.prs_errored.len(), 1);
+        assert_eq!(result.prs_errored[0].repo_name, "org/alpha");
+        assert!(result.prs_errored[0].error.is_some());
+        assert_eq!(result.prs_created.len(), 1);
+        assert_eq!(result.prs_created[0].repo_name, "org/beta");
+        assert_eq!(provider.create_pr_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

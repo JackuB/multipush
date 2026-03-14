@@ -13,7 +13,7 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn Provider>> {
             let provider = GitHubProvider::new(config)?;
             Ok(Box::new(provider))
         }
-        ProviderType::Gitea => bail!("gitea provider is not yet implemented"),
+        ProviderType::Gitea => bail!("Unknown provider type 'gitea'. Available: github"),
     }
 }
 

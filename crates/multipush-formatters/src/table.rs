@@ -390,9 +390,11 @@ mod tests {
                     state: PrState::Open,
                 }),
                 action: PrActionKind::Created,
+                error: None,
             }],
             prs_updated: vec![],
             prs_skipped: vec![],
+            prs_errored: vec![],
             prs_limited: 0,
         };
 

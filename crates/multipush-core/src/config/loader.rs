@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde_yaml_ng::{Mapping, Value};
+use strsim::levenshtein;
 
 use crate::config::RootConfig;
 use crate::error::CoreError;
@@ -36,14 +37,22 @@ struct ConfigLayer {
 pub fn load_config(sources: &[ConfigSource]) -> Result<RootConfig> {
     let layers = collect_layers(sources)?;
     if layers.is_empty() {
-        return Err(CoreError::Config("no configuration found".into()));
+        return Err(CoreError::Config(
+            "Config file .multipush/multipush.yml not found. Create one or specify --config path."
+                .into(),
+        ));
     }
     let mut merged = merge_layers(layers);
     expand_recipes(&mut merged)?;
+    tracing::trace!(config = ?merged, "config after merge");
     let config: RootConfig = serde_yaml_ng::from_value(merged).map_err(|e| {
         let msg = e.to_string();
         let enhanced = enhance_deser_error(&msg);
-        CoreError::Config(enhanced)
+        let location = e
+            .location()
+            .map(|loc| format!(" at line {} column {}", loc.line(), loc.column()))
+            .unwrap_or_default();
+        CoreError::Config(format!("{enhanced}{location}"))
     })?;
     validate(&config)?;
     Ok(config)
@@ -95,8 +104,13 @@ fn load_layer(path: &Path) -> Result<ConfigLayer> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| CoreError::Config(format!("cannot read {}: {e}", path.display())))?;
     let resolved = resolve_env_vars(&raw)?;
-    let value: Value = serde_yaml_ng::from_str(&resolved)
-        .map_err(|e| CoreError::Config(format!("{}: {e}", path.display())))?;
+    let value: Value = serde_yaml_ng::from_str(&resolved).map_err(|e| {
+        let location = e
+            .location()
+            .map(|loc| format!(" at line {} column {}", loc.line(), loc.column()))
+            .unwrap_or_default();
+        CoreError::Config(format!("Error in {}{location}: {e}", path.display()))
+    })?;
     Ok(ConfigLayer {
         source: path.display().to_string(),
         value,
@@ -403,7 +417,7 @@ fn validate(config: &RootConfig) -> Result<()> {
 fn validate_policy(policy: &crate::config::PolicyConfig, errors: &mut Vec<String>) {
     if policy.rules.is_empty() {
         errors.push(format!(
-            "policy '{}' must have at least one rule",
+            "Policy '{}' has no rules. Add at least one rule.",
             policy.name
         ));
     }
@@ -489,25 +503,7 @@ fn suggest_rule_type(unknown: &str) -> Option<String> {
             _ => {}
         }
     }
-    best.map(|(name, _)| format!("Did you mean '!{name}'?"))
-}
-
-fn levenshtein(a: &str, b: &str) -> usize {
-    let b_len = b.len();
-    let mut prev: Vec<usize> = (0..=b_len).collect();
-    let mut curr = vec![0; b_len + 1];
-
-    for (i, ca) in a.chars().enumerate() {
-        curr[0] = i + 1;
-        for (j, cb) in b.chars().enumerate() {
-            let cost = if ca == cb { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[b_len]
+    best.map(|(name, _)| format!("Did you mean '{name}'?"))
 }
 
 // ---------------------------------------------------------------------------
@@ -683,7 +679,7 @@ policies:
 "#;
         let err = load_single(yaml).unwrap_err();
         assert!(err.to_string().contains("empty-policy"));
-        assert!(err.to_string().contains("at least one rule"));
+        assert!(err.to_string().contains("Add at least one rule"));
     }
 
     #[test]
@@ -704,7 +700,7 @@ policies:
         let msg = err.to_string();
         assert!(msg.contains("org must not be empty"), "got: {msg}");
         assert!(msg.contains("token must not be empty"), "got: {msg}");
-        assert!(msg.contains("at least one rule"), "got: {msg}");
+        assert!(msg.contains("Add at least one rule"), "got: {msg}");
     }
 
     #[test]
@@ -905,13 +901,6 @@ provider:
     }
 
     #[test]
-    fn levenshtein_basic() {
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
-        assert_eq!(levenshtein("", "abc"), 3);
-        assert_eq!(levenshtein("abc", "abc"), 0);
-    }
-
-    #[test]
     fn suggest_rule_type_typo() {
         let suggestion = suggest_rule_type("ensure_flie");
         assert!(suggestion.is_some());
@@ -933,7 +922,7 @@ provider:
         let result = load_config(&[]);
         std::env::set_current_dir(original).unwrap();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no configuration found"));
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]

@@ -70,6 +70,7 @@ pub fn build_pr_action_map(report: &ApplyReport) -> std::collections::HashMap<(S
                 PrActionKind::Updated => "PR updated".to_string(),
                 PrActionKind::Skipped => "Skipped (existing)".to_string(),
                 PrActionKind::DryRun => "Would create PR".to_string(),
+                PrActionKind::Error => "Error".to_string(),
             };
             let url = action
                 .pr
@@ -86,6 +87,7 @@ pub fn build_pr_action_map(report: &ApplyReport) -> std::collections::HashMap<(S
     insert_actions(&mut map, &report.prs_created);
     insert_actions(&mut map, &report.prs_updated);
     insert_actions(&mut map, &report.prs_skipped);
+    insert_actions(&mut map, &report.prs_errored);
 
     map
 }
@@ -106,6 +108,8 @@ pub fn format_pr_summary(report: &ApplyReport) -> String {
     if would_update > 0 { parts.push(format!("{would_update} would update")); }
     if skipped > 0 { parts.push(format!("{skipped} skipped")); }
     if limited > 0 { parts.push(format!("{limited} limited (max-prs)")); }
+    let errored = report.prs_errored.len();
+    if errored > 0 { parts.push(format!("{errored} errored")); }
 
     if parts.is_empty() {
         "0 actions".to_string()
