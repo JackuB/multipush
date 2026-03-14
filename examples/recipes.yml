@@ -1,0 +1,59 @@
+# Recipe examples — reusable policy templates with parameters
+#
+# Recipes expand into regular rules at load time. Each recipe requires
+# a `targets:` block and accepts `params:` for customization.
+#
+# Usage:
+#   multipush check -c examples/recipes.yml
+#   multipush list-rules -v   # see all recipes and their parameters
+
+provider:
+  type: github
+  org: ${GITHUB_ORG}
+  token: ${GITHUB_TOKEN}
+
+policies:
+  # CODEOWNERS — ensure every repo has a code ownership file
+  - recipe: codeowners
+    params:
+      default_owner: "@my-org/platform-team"
+    targets:
+      repos: "${GITHUB_ORG}/*"
+
+  # SECURITY.md — vulnerability reporting instructions
+  - recipe: security-md
+    params:
+      contact_email: "security@example.com"
+    targets:
+      repos: "${GITHUB_ORG}/*"
+
+  # LICENSE — add an MIT license to all repos
+  - recipe: license
+    params:
+      license_type: MIT
+      author: "My Org, Inc."
+    targets:
+      repos: "${GITHUB_ORG}/*"
+
+  # .editorconfig — consistent editor settings
+  - recipe: editorconfig
+    params:
+      indent_style: space
+      indent_size: "2"
+    targets:
+      repos: "${GITHUB_ORG}/*"
+
+  # .gitignore — language-specific ignore patterns
+  - recipe: gitignore
+    params:
+      template: rust
+    targets:
+      repos: "${GITHUB_ORG}/*"
+
+  # Dependabot — automated dependency updates
+  - recipe: dependabot
+    params:
+      ecosystem: cargo
+      schedule: weekly
+    targets:
+      repos: "${GITHUB_ORG}/*"

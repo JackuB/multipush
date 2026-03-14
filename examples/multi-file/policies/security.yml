@@ -1,0 +1,19 @@
+# Security policies — SECURITY.md and Dependabot for Rust projects
+
+policies:
+  - recipe: security-md
+    params:
+      contact_email: "security@example.com"
+    targets:
+      repos: "${GITHUB_ORG}/*"
+
+  - recipe: dependabot
+    name: rust-dependabot
+    description: Rust projects should have Dependabot for Cargo
+    params:
+      ecosystem: cargo
+      schedule: weekly
+    targets:
+      repos: "${GITHUB_ORG}/*"
+      filters:
+        - !has_file Cargo.toml

@@ -1,0 +1,22 @@
+# Multi-file configuration: provider config
+#
+# This file defines only the provider. Policies live in the policies/ directory.
+#
+# Usage:
+#   multipush check -c examples/multi-file/multipush.yml -c examples/multi-file/policies/
+#   multipush validate -c examples/multi-file/multipush.yml -c examples/multi-file/policies/
+
+provider:
+  type: github
+  org: ${GITHUB_ORG}
+  token: ${GITHUB_TOKEN}
+
+# Default settings applied to all policies
+defaults:
+  targets:
+    repos: "${GITHUB_ORG}/*"
+    exclude_archived: true
+  apply:
+    pr_prefix: multipush
+    pr_labels:
+      - automation

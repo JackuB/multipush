@@ -1,0 +1,30 @@
+# Node.js-specific policies
+#
+# These policies target repos that contain a package.json file.
+# Note: the has_file filter is parsed but not yet evaluated at runtime.
+
+policies:
+  - name: node-engines
+    description: Node.js projects should declare a minimum engine version
+    severity: warning
+    targets:
+      repos: "${GITHUB_ORG}/*"
+      filters:
+        - !has_file package.json
+    rules:
+      - !ensure_json_key
+        path: package.json
+        key: engines.node
+        value: ">=18"
+        mode: enforce
+
+  - name: node-dependabot
+    description: Node.js projects should have Dependabot enabled
+    severity: warning
+    targets:
+      repos: "${GITHUB_ORG}/*"
+      filters:
+        - !has_file package.json
+    rules:
+      - !ensure_file
+        path: .github/dependabot.yml

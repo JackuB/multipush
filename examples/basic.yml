@@ -1,18 +1,37 @@
+# Basic multipush configuration
+#
+# Set GITHUB_ORG and GITHUB_TOKEN environment variables before running:
+#   export GITHUB_ORG=my-org
+#   export GITHUB_TOKEN=ghp_...
+#
+# Usage:
+#   multipush check -c examples/basic.yml
+#   multipush apply --dry-run -c examples/basic.yml
+
+# Provider configuration — which platform and org to target
 provider:
   type: github
   org: ${GITHUB_ORG}
   token: ${GITHUB_TOKEN}
 
+# Policies — each defines rules to evaluate against target repos
 policies:
+  # Ensure every repo has a README file
   - name: require-readme
     description: Every repository should have a README
-    severity: error
+    severity: error       # error | warning | info (default: error)
     targets:
-      repos: "${GITHUB_ORG}/*"
+      repos: "${GITHUB_ORG}/*"     # glob pattern matching repo full names
+      # exclude:                   # optional list of exclusion patterns
+      #   - "${GITHUB_ORG}/archived-*"
+      # exclude_archived: true     # skip archived repos (default: true)
     rules:
-      - !ensure_file
+      - !ensure_file               # YAML tag selects the rule type
         path: README.md
+        # content: "# My Project"  # optional: expected content
+        # mode: create_if_missing  # create_if_missing | exact_match | contains
 
+  # Ensure every repo has a LICENSE file
   - name: require-license
     description: Every repository should have a LICENSE file
     severity: warning

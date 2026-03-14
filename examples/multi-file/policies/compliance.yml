@@ -1,0 +1,22 @@
+# Compliance policies — CODEOWNERS and README requirements
+
+policies:
+  - name: require-codeowners
+    description: Every repository must have a CODEOWNERS file
+    severity: error
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !ensure_file
+        path: CODEOWNERS
+        content: "* @${GITHUB_ORG}/platform-team\n"
+        mode: create_if_missing
+
+  - name: require-readme
+    description: Every repository must have a README
+    severity: warning
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !ensure_file
+        path: README.md
