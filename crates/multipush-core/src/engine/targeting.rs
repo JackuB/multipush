@@ -14,9 +14,8 @@ pub fn filter_repos(repos: &[Repo], targets: &TargetConfig) -> Result<Vec<Repo>>
     let exclude = {
         let mut builder = GlobSetBuilder::new();
         for pattern in &targets.exclude {
-            let glob = Glob::new(pattern).map_err(|e| {
-                CoreError::Config(format!("invalid exclude glob '{pattern}': {e}"))
-            })?;
+            let glob = Glob::new(pattern)
+                .map_err(|e| CoreError::Config(format!("invalid exclude glob '{pattern}': {e}")))?;
             builder.add(glob);
         }
         builder
@@ -119,10 +118,7 @@ mod tests {
 
     #[test]
     fn archived_filtering() {
-        let repos = vec![
-            make_repo("org/active", false),
-            make_repo("org/old", true),
-        ];
+        let repos = vec![make_repo("org/active", false), make_repo("org/old", true)];
 
         let result = filter_repos(&repos, &targets("org/*")).unwrap();
         assert_eq!(result.len(), 1);
@@ -131,10 +127,7 @@ mod tests {
 
     #[test]
     fn archived_included_when_disabled() {
-        let repos = vec![
-            make_repo("org/active", false),
-            make_repo("org/old", true),
-        ];
+        let repos = vec![make_repo("org/active", false), make_repo("org/old", true)];
 
         let t = TargetConfig {
             repos: "org/*".to_string(),

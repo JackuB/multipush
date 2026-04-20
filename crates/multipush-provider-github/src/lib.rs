@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use multipush_core::config::ProviderConfig;
 use multipush_core::error::CoreError;
 use multipush_core::model::{
-    FileChange, FileContent, PrState, PullRequest, Repo, RepoSettings, Visibility,
+    FileChange, FileContent, PrState, PullRequest, Repo, RepoSettings, RepoSettingsPatch,
+    Visibility,
 };
 use multipush_core::provider::Provider;
 use octocrab::Octocrab;
@@ -120,9 +121,7 @@ impl GitHubProvider {
 
         match result {
             Ok(_) => Ok(()),
-            Err(octocrab::Error::GitHub { source, .. })
-                if source.status_code.as_u16() == 422 =>
-            {
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 422 => {
                 tracing::debug!("Branch {} already exists, reusing", branch);
                 Ok(())
             }
@@ -163,10 +162,7 @@ impl GitHubProvider {
                 .get_file(repo, &change.path, branch)
                 .await?
                 .ok_or_else(|| {
-                    CoreError::Provider(format!(
-                        "Cannot delete non-existent file: {}",
-                        change.path
-                    ))
+                    CoreError::Provider(format!("Cannot delete non-existent file: {}", change.path))
                 })?;
             repos
                 .delete_file(&change.path, &change.message, &existing.sha)
@@ -296,9 +292,7 @@ impl GitHubProvider {
         let remaining = response["resources"]["core"]["remaining"]
             .as_u64()
             .unwrap_or(5000);
-        let reset = response["resources"]["core"]["reset"]
-            .as_u64()
-            .unwrap_or(0);
+        let reset = response["resources"]["core"]["reset"].as_u64().unwrap_or(0);
 
         let mut state = self.rate_limit.lock().await;
         state.remaining = Some(remaining);
@@ -385,9 +379,7 @@ fn map_octocrab_pr(pr: &octocrab::models::pulls::PullRequest) -> PullRequest {
 
 fn map_repo(repo: octocrab::models::Repository, org: &str) -> Repo {
     let name = repo.name;
-    let full_name = repo
-        .full_name
-        .unwrap_or_else(|| format!("{org}/{name}"));
+    let full_name = repo.full_name.unwrap_or_else(|| format!("{org}/{name}"));
     let owner = repo
         .owner
         .map(|o| o.login)
@@ -446,10 +438,7 @@ impl Provider for GitHubProvider {
                 repos.extend(page.take_items());
             }
 
-            let result: Vec<Repo> = repos
-                .into_iter()
-                .map(|r| map_repo(r, org))
-                .collect();
+            let result: Vec<Repo> = repos.into_iter().map(|r| map_repo(r, org)).collect();
 
             tracing::debug!(count = result.len(), org = org, "listed repos");
 
@@ -477,11 +466,10 @@ impl Provider for GitHubProvider {
 
             match result {
                 Ok(content) => {
-                    let item = content
-                        .items
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| CoreError::Provider("No content items returned".into()))?;
+                    let item =
+                        content.items.into_iter().next().ok_or_else(|| {
+                            CoreError::Provider("No content items returned".into())
+                        })?;
 
                     let decoded = item.decoded_content().ok_or_else(|| {
                         CoreError::Provider("Failed to decode file content".into())
@@ -546,8 +534,7 @@ impl Provider for GitHubProvider {
             self.check_rate_limit().await?;
 
             let base_sha = self.get_branch_sha(repo, base).await?;
-            self.create_or_reuse_branch(repo, branch, &base_sha)
-                .await?;
+            self.create_or_reuse_branch(repo, branch, &base_sha).await?;
 
             if changes.len() >= 2 {
                 self.push_changes_tree_api(repo, branch, &changes).await?;
@@ -568,7 +555,9 @@ impl Provider for GitHubProvider {
 
             Ok(map_octocrab_pr(&pr))
         }
-        .instrument(debug_span!("api", method = "create_pr", repo = %repo.full_name, branch = branch))
+        .instrument(
+            debug_span!("api", method = "create_pr", repo = %repo.full_name, branch = branch),
+        )
         .await
     }
 
@@ -593,7 +582,29 @@ impl Provider for GitHubProvider {
 
             Ok(pr.clone())
         }
-        .instrument(debug_span!("api", method = "update_pr", repo = %repo.full_name, pr = pr.number))
+        .instrument(
+            debug_span!("api", method = "update_pr", repo = %repo.full_name, pr = pr.number),
+        )
+        .await
+    }
+
+    async fn update_repo_settings(
+        &self,
+        repo: &Repo,
+        patch: &RepoSettingsPatch,
+    ) -> multipush_core::Result<()> {
+        async {
+            self.check_rate_limit().await?;
+
+            let _: serde_json::Value = self
+                .client
+                .patch(format!("/repos/{}/{}", repo.owner, repo.name), Some(patch))
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(())
+        }
+        .instrument(debug_span!("api", method = "update_repo_settings", repo = %repo.full_name))
         .await
     }
 }
@@ -877,9 +888,8 @@ mod tests {
             .and(path("/repos/test-org/test-repo/pulls"))
             .and(query_param("state", "open"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                    pr_json(42, "multipush/fix")
-                ])),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([pr_json(42, "multipush/fix")])),
             )
             .mount(&server)
             .await;
@@ -902,10 +912,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/pulls"))
             .and(query_param("state", "open"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!([])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
 
@@ -938,9 +945,7 @@ mod tests {
         // GET contents (file doesn't exist)
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/contents/README.md"))
-            .respond_with(
-                ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")))
             .mount(&server)
             .await;
 
@@ -954,9 +959,7 @@ mod tests {
         // POST pulls (create PR)
         Mock::given(method("POST"))
             .and(path("/repos/test-org/test-repo/pulls"))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(pr_json(99, "multipush/fix")),
-            )
+            .respond_with(ResponseTemplate::new(201).set_body_json(pr_json(99, "multipush/fix")))
             .mount(&server)
             .await;
 
@@ -967,7 +970,14 @@ mod tests {
         }];
 
         let result = provider
-            .create_pr(&repo, "multipush/fix", "main", "Fix policy", "Body", changes)
+            .create_pr(
+                &repo,
+                "multipush/fix",
+                "main",
+                "Fix policy",
+                "Body",
+                changes,
+            )
             .await
             .unwrap();
 
@@ -1003,17 +1013,13 @@ mod tests {
             .and(path(
                 "/repos/test-org/test-repo/git/ref/heads/multipush/fix",
             ))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(ref_json("branch_sha_def")),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(ref_json("branch_sha_def")))
             .mount(&server)
             .await;
 
         // GET git/commits (get tree SHA)
         Mock::given(method("GET"))
-            .and(path(
-                "/repos/test-org/test-repo/git/commits/branch_sha_def",
-            ))
+            .and(path("/repos/test-org/test-repo/git/commits/branch_sha_def"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "sha": "branch_sha_def",
                 "tree": { "sha": "tree_sha_base", "url": "https://api.github.com/..." },
@@ -1061,9 +1067,7 @@ mod tests {
         // POST pulls (create PR)
         Mock::given(method("POST"))
             .and(path("/repos/test-org/test-repo/pulls"))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(pr_json(100, "multipush/fix")),
-            )
+            .respond_with(ResponseTemplate::new(201).set_body_json(pr_json(100, "multipush/fix")))
             .mount(&server)
             .await;
 
@@ -1123,9 +1127,7 @@ mod tests {
         // GET contents (file doesn't exist)
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/contents/README.md"))
-            .respond_with(
-                ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")))
             .mount(&server)
             .await;
 
@@ -1139,9 +1141,7 @@ mod tests {
         // POST pulls
         Mock::given(method("POST"))
             .and(path("/repos/test-org/test-repo/pulls"))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(pr_json(101, "multipush/fix")),
-            )
+            .respond_with(ResponseTemplate::new(201).set_body_json(pr_json(101, "multipush/fix")))
             .mount(&server)
             .await;
 
@@ -1152,7 +1152,14 @@ mod tests {
         }];
 
         let result = provider
-            .create_pr(&repo, "multipush/fix", "main", "Fix policy", "Body", changes)
+            .create_pr(
+                &repo,
+                "multipush/fix",
+                "main",
+                "Fix policy",
+                "Body",
+                changes,
+            )
             .await
             .unwrap();
 
@@ -1201,9 +1208,7 @@ mod tests {
         // POST pulls
         Mock::given(method("POST"))
             .and(path("/repos/test-org/test-repo/pulls"))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(pr_json(102, "multipush/fix")),
-            )
+            .respond_with(ResponseTemplate::new(201).set_body_json(pr_json(102, "multipush/fix")))
             .mount(&server)
             .await;
 
@@ -1214,11 +1219,123 @@ mod tests {
         }];
 
         let result = provider
-            .create_pr(&repo, "multipush/fix", "main", "Fix policy", "Body", changes)
+            .create_pr(
+                &repo,
+                "multipush/fix",
+                "main",
+                "Fix policy",
+                "Body",
+                changes,
+            )
             .await
             .unwrap();
 
         assert_eq!(result.number, 102);
+    }
+
+    #[tokio::test]
+    async fn update_repo_settings_all_fields() {
+        use wiremock::matchers::body_json;
+
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        let patch = RepoSettingsPatch {
+            has_issues: Some(true),
+            has_wiki: Some(false),
+            has_projects: Some(false),
+            allow_merge_commit: Some(false),
+            allow_squash_merge: Some(true),
+            allow_rebase_merge: Some(false),
+            delete_branch_on_merge: Some(true),
+            allow_auto_merge: Some(true),
+            default_branch: Some("main".to_string()),
+        };
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test-org/test-repo"))
+            .and(body_json(serde_json::json!({
+                "has_issues": true,
+                "has_wiki": false,
+                "has_projects": false,
+                "allow_merge_commit": false,
+                "allow_squash_merge": true,
+                "allow_rebase_merge": false,
+                "delete_branch_on_merge": true,
+                "allow_auto_merge": true,
+                "default_branch": "main"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1,
+                "name": "test-repo",
+                "full_name": "test-org/test-repo"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        provider.update_repo_settings(&repo, &patch).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_repo_settings_partial_patch() {
+        use wiremock::matchers::body_json;
+
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        let patch = RepoSettingsPatch {
+            has_wiki: Some(false),
+            delete_branch_on_merge: Some(true),
+            ..Default::default()
+        };
+
+        // Only the two set fields should appear in the request body.
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test-org/test-repo"))
+            .and(body_json(serde_json::json!({
+                "has_wiki": false,
+                "delete_branch_on_merge": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1,
+                "name": "test-repo",
+                "full_name": "test-org/test-repo"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        provider.update_repo_settings(&repo, &patch).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_repo_settings_api_error() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        let patch = RepoSettingsPatch {
+            has_wiki: Some(false),
+            ..Default::default()
+        };
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test-org/test-repo"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(github_error_json("Forbidden")))
+            .mount(&server)
+            .await;
+
+        let result = provider.update_repo_settings(&repo, &patch).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1240,9 +1357,7 @@ mod tests {
         // GET contents (file doesn't exist)
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/contents/README.md"))
-            .respond_with(
-                ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")))
             .mount(&server)
             .await;
 
@@ -1259,7 +1374,10 @@ mod tests {
             message: "Add README".to_string(),
         }];
 
-        let result = provider.update_pr(&repo, &existing_pr, changes).await.unwrap();
+        let result = provider
+            .update_pr(&repo, &existing_pr, changes)
+            .await
+            .unwrap();
 
         // update_pr returns the original PR unchanged
         assert_eq!(result.number, 50);

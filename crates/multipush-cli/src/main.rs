@@ -173,15 +173,13 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::ListRules { verbose, quiet } => {
-            match run_list_rules(verbose, quiet) {
-                Ok(code) => code,
-                Err(e) => {
-                    error!("{e:#}");
-                    ExitCode::from(2)
-                }
+        Command::ListRules { verbose, quiet } => match run_list_rules(verbose, quiet) {
+            Ok(code) => code,
+            Err(e) => {
+                error!("{e:#}");
+                ExitCode::from(2)
             }
-        }
+        },
         Command::Validate {
             config,
             verbose,
@@ -211,7 +209,16 @@ fn main() -> ExitCode {
         } => {
             init_tracing(verbose, quiet);
 
-            match run_apply(config, format, policy, dry_run, max_prs, concurrency, no_color, fail_on) {
+            match run_apply(
+                config,
+                format,
+                policy,
+                dry_run,
+                max_prs,
+                concurrency,
+                no_color,
+                fail_on,
+            ) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -249,10 +256,7 @@ fn run_check(
     if !policy_filter.is_empty() {
         config.policies.retain(|p| policy_filter.contains(&p.name));
         if config.policies.is_empty() {
-            bail!(
-                "no policies matched filter: {}",
-                policy_filter.join(", ")
-            );
+            bail!("no policies matched filter: {}", policy_filter.join(", "));
         }
     }
 
@@ -260,7 +264,12 @@ fn run_check(
     let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules, concurrency))?;
+    let report = rt.block_on(evaluate(
+        &config,
+        provider.as_ref(),
+        registry::create_rules,
+        concurrency,
+    ))?;
 
     let output = formatter.format(&report)?;
     if !output.is_empty() {
@@ -301,10 +310,7 @@ fn run_apply(
     if !policy_filter.is_empty() {
         config.policies.retain(|p| policy_filter.contains(&p.name));
         if config.policies.is_empty() {
-            bail!(
-                "no policies matched filter: {}",
-                policy_filter.join(", ")
-            );
+            bail!("no policies matched filter: {}", policy_filter.join(", "));
         }
     }
 
@@ -312,8 +318,19 @@ fn run_apply(
     let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    let report = rt.block_on(evaluate(&config, provider.as_ref(), registry::create_rules, concurrency))?;
-    let apply_report = rt.block_on(execute(&report, &config, provider.as_ref(), dry_run, max_prs))?;
+    let report = rt.block_on(evaluate(
+        &config,
+        provider.as_ref(),
+        registry::create_rules,
+        concurrency,
+    ))?;
+    let apply_report = rt.block_on(execute(
+        &report,
+        &config,
+        provider.as_ref(),
+        dry_run,
+        max_prs,
+    ))?;
 
     let output = formatter.format_apply(&apply_report)?;
     if !output.is_empty() {
@@ -368,10 +385,17 @@ fn run_validate(config_paths: Vec<PathBuf>) -> Result<ExitCode> {
 
 fn run_list_rules(verbose: u8, quiet: bool) -> Result<ExitCode> {
     let rules = [
-        ("ensure_file", "Ensure a file exists with optional content matching"),
+        (
+            "ensure_file",
+            "Ensure a file exists with optional content matching",
+        ),
         ("ensure_json_key", "Ensure a key exists in a JSON file"),
         ("ensure_yaml_key", "Ensure a key exists in a YAML file"),
         ("file_matches", "Check file content against a regex pattern"),
+        (
+            "repo_settings",
+            "Ensure repository settings (merge options, features) match policy",
+        ),
     ];
 
     if quiet {

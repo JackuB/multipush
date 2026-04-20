@@ -48,8 +48,8 @@ async fn apply_mode_existing_pr_skip() {
         state: PrState::Open,
     };
 
-    let provider = MockProvider::new(vec![])
-        .with_open_pr("org/alpha:multipush/require-license", existing_pr);
+    let provider =
+        MockProvider::new(vec![]).with_open_pr("org/alpha:multipush/require-license", existing_pr);
 
     let report = make_report_with_failures(&["org/alpha"], true);
 
@@ -84,8 +84,8 @@ async fn apply_mode_existing_pr_update() {
         state: PrState::Open,
     };
 
-    let provider = MockProvider::new(vec![])
-        .with_open_pr("org/alpha:multipush/require-license", existing_pr);
+    let provider =
+        MockProvider::new(vec![]).with_open_pr("org/alpha:multipush/require-license", existing_pr);
 
     let report = make_report_with_failures(&["org/alpha"], true);
     let config = default_config();
@@ -102,10 +102,7 @@ async fn apply_mode_existing_pr_update() {
 #[tokio::test]
 async fn apply_mode_max_prs() {
     let provider = MockProvider::new(vec![]);
-    let report = make_report_with_failures(
-        &["org/a", "org/b", "org/c", "org/d", "org/e"],
-        true,
-    );
+    let report = make_report_with_failures(&["org/a", "org/b", "org/c", "org/d", "org/e"], true);
     let config = default_config();
 
     let result = execute(&report, &config, &provider, false, 2)

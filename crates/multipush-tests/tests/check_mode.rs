@@ -18,8 +18,7 @@ fn rules_factory(policy: &PolicyConfig) -> Result<Vec<Box<dyn Rule>>> {
 #[tokio::test]
 async fn check_mode_basic() {
     let repos = vec![make_repo("org/has-readme"), make_repo("org/no-readme")];
-    let provider =
-        MockProvider::new(repos).with_file("org/has-readme:README.md", "# Has Readme");
+    let provider = MockProvider::new(repos).with_file("org/has-readme:README.md", "# Has Readme");
 
     let config = test_config(vec![PolicyConfig {
         name: "require-readme".to_string(),
@@ -124,5 +123,8 @@ async fn check_mode_multiple_rules() {
         multipush_core::formatter::RepoOutcome::Fail { detail, .. } => detail.clone(),
         other => panic!("expected Fail, got {other:?}"),
     };
-    assert!(detail.contains("LICENSE"), "detail should mention LICENSE: {detail}");
+    assert!(
+        detail.contains("LICENSE"),
+        "detail should mention LICENSE: {detail}"
+    );
 }

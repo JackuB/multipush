@@ -131,3 +131,72 @@ pub struct RepoSettings {
     pub default_branch: String,
     pub allow_auto_merge: bool,
 }
+
+/// Partial update to repository-level settings. Only set fields are sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoSettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_issues: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_wiki: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_projects: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_merge_commit: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_squash_merge: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_rebase_merge: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_branch_on_merge: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_auto_merge: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+}
+
+impl RepoSettingsPatch {
+    /// Merge `other` into `self`. Fields set in `other` override `self`.
+    pub fn merge(&mut self, other: RepoSettingsPatch) {
+        if other.has_issues.is_some() {
+            self.has_issues = other.has_issues;
+        }
+        if other.has_wiki.is_some() {
+            self.has_wiki = other.has_wiki;
+        }
+        if other.has_projects.is_some() {
+            self.has_projects = other.has_projects;
+        }
+        if other.allow_merge_commit.is_some() {
+            self.allow_merge_commit = other.allow_merge_commit;
+        }
+        if other.allow_squash_merge.is_some() {
+            self.allow_squash_merge = other.allow_squash_merge;
+        }
+        if other.allow_rebase_merge.is_some() {
+            self.allow_rebase_merge = other.allow_rebase_merge;
+        }
+        if other.delete_branch_on_merge.is_some() {
+            self.delete_branch_on_merge = other.delete_branch_on_merge;
+        }
+        if other.allow_auto_merge.is_some() {
+            self.allow_auto_merge = other.allow_auto_merge;
+        }
+        if other.default_branch.is_some() {
+            self.default_branch = other.default_branch;
+        }
+    }
+
+    /// Returns true if no fields are set.
+    pub fn is_empty(&self) -> bool {
+        self.has_issues.is_none()
+            && self.has_wiki.is_none()
+            && self.has_projects.is_none()
+            && self.allow_merge_commit.is_none()
+            && self.allow_squash_merge.is_none()
+            && self.allow_rebase_merge.is_none()
+            && self.delete_branch_on_merge.is_none()
+            && self.allow_auto_merge.is_none()
+            && self.default_branch.is_none()
+    }
+}

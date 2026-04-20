@@ -14,3 +14,4 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+multipush-core = { workspace = true, features = ["test-helpers"] }

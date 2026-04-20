@@ -4,10 +4,11 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::config::{ProviderConfig, ProviderType, RootConfig, PolicyConfig};
-use crate::formatter::{PolicyReport, Report, RepoOutcome, RepoResult, Summary};
+use crate::config::{PolicyConfig, ProviderConfig, ProviderType, RootConfig};
+use crate::formatter::{PolicyReport, RepoOutcome, RepoResult, Report, Summary};
 use crate::model::{
-    FileChange, FileContent, PrState, PullRequest, Repo, RepoSettings, Severity, Visibility,
+    FileChange, FileContent, PrState, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Severity,
+    Visibility,
 };
 use crate::provider::Provider;
 use crate::rule::Remediation;
@@ -18,8 +19,11 @@ pub struct MockProvider {
     pub repos: Vec<Repo>,
     pub files: Mutex<HashMap<String, FileContent>>,
     pub open_prs: Mutex<HashMap<String, PullRequest>>,
+    pub repo_settings: Mutex<HashMap<String, RepoSettings>>,
     pub create_pr_calls: AtomicUsize,
     pub update_pr_calls: AtomicUsize,
+    pub update_repo_settings_calls: AtomicUsize,
+    pub update_repo_settings_history: Mutex<Vec<(String, RepoSettingsPatch)>>,
 }
 
 impl MockProvider {
@@ -28,9 +32,21 @@ impl MockProvider {
             repos,
             files: Mutex::new(HashMap::new()),
             open_prs: Mutex::new(HashMap::new()),
+            repo_settings: Mutex::new(HashMap::new()),
             create_pr_calls: AtomicUsize::new(0),
             update_pr_calls: AtomicUsize::new(0),
+            update_repo_settings_calls: AtomicUsize::new(0),
+            update_repo_settings_history: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Set the repo settings returned by `get_repo_settings` for a repo's full name.
+    pub fn with_repo_settings(self, full_name: &str, settings: RepoSettings) -> Self {
+        self.repo_settings
+            .lock()
+            .unwrap()
+            .insert(full_name.to_string(), settings);
+        self
     }
 
     /// Add a file to the mock. Key format: `"owner/repo:path"`.
@@ -76,7 +92,10 @@ impl Provider for MockProvider {
         Ok(self.files.lock().unwrap().get(&key).cloned())
     }
 
-    async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> {
+    async fn get_repo_settings(&self, repo: &Repo) -> Result<RepoSettings> {
+        if let Some(s) = self.repo_settings.lock().unwrap().get(&repo.full_name) {
+            return Ok(s.clone());
+        }
         Ok(RepoSettings {
             has_issues: true,
             has_wiki: false,
@@ -90,11 +109,7 @@ impl Provider for MockProvider {
         })
     }
 
-    async fn find_open_pr(
-        &self,
-        repo: &Repo,
-        head: &str,
-    ) -> Result<Option<PullRequest>> {
+    async fn find_open_pr(&self, repo: &Repo, head: &str) -> Result<Option<PullRequest>> {
         let key = format!("{}:{}", repo.full_name, head);
         Ok(self.open_prs.lock().unwrap().get(&key).cloned())
     }
@@ -126,6 +141,16 @@ impl Provider for MockProvider {
     ) -> Result<PullRequest> {
         self.update_pr_calls.fetch_add(1, Ordering::SeqCst);
         Ok(pr.clone())
+    }
+
+    async fn update_repo_settings(&self, repo: &Repo, patch: &RepoSettingsPatch) -> Result<()> {
+        self.update_repo_settings_calls
+            .fetch_add(1, Ordering::SeqCst);
+        self.update_repo_settings_history
+            .lock()
+            .unwrap()
+            .push((repo.full_name.clone(), patch.clone()));
+        Ok(())
     }
 }
 
@@ -174,7 +199,7 @@ pub fn default_config() -> RootConfig {
 /// Build a `Report` with failing repos, optionally with remediations.
 pub fn make_report_with_failures(repo_names: &[&str], with_remediations: bool) -> Report {
     let remediations = if with_remediations {
-        vec![Remediation {
+        vec![Remediation::FileChanges {
             description: "Create LICENSE file".to_string(),
             changes: vec![FileChange {
                 path: "LICENSE".to_string(),

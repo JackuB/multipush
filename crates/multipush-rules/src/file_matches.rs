@@ -56,10 +56,7 @@ impl Rule for FileMatchesRule {
 
         if self.regex.is_match(&file.content) {
             Ok(RuleResult::Pass {
-                detail: format!(
-                    "File {path} matches pattern `{}`",
-                    self.config.pattern
-                ),
+                detail: format!("File {path} matches pattern `{}`", self.config.pattern),
             })
         } else {
             Ok(RuleResult::Fail {
@@ -76,7 +73,9 @@ impl Rule for FileMatchesRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use multipush_core::model::{FileChange, FileContent, PullRequest, Repo, RepoSettings, Visibility};
+    use multipush_core::model::{
+        FileChange, FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Visibility,
+    };
     use multipush_core::provider::Provider;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -124,10 +123,7 @@ mod tests {
             Ok(self.files.lock().unwrap().get(path).cloned())
         }
 
-        async fn get_repo_settings(
-            &self,
-            _repo: &Repo,
-        ) -> multipush_core::Result<RepoSettings> {
+        async fn get_repo_settings(&self, _repo: &Repo) -> multipush_core::Result<RepoSettings> {
             unimplemented!()
         }
 
@@ -157,6 +153,14 @@ mod tests {
             _pr: &PullRequest,
             _changes: Vec<FileChange>,
         ) -> multipush_core::Result<PullRequest> {
+            unimplemented!()
+        }
+
+        async fn update_repo_settings(
+            &self,
+            _repo: &Repo,
+            _patch: &RepoSettingsPatch,
+        ) -> multipush_core::Result<()> {
             unimplemented!()
         }
     }
@@ -226,7 +230,13 @@ mod tests {
             repo: &repo,
         };
         let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Fail { remediation: None, .. }));
+        assert!(matches!(
+            result,
+            RuleResult::Fail {
+                remediation: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -237,8 +247,10 @@ mod tests {
         })
         .unwrap();
 
-        let provider = TestProvider::new()
-            .with_file("Cargo.toml", "[package]\nname = \"foo\"\nedition = \"2021\"\n");
+        let provider = TestProvider::new().with_file(
+            "Cargo.toml",
+            "[package]\nname = \"foo\"\nedition = \"2021\"\n",
+        );
         let repo = test_repo();
         let ctx = RuleContext {
             provider: &provider,

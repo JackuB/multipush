@@ -10,7 +10,7 @@ pub use policy::{FilterConfig, PolicyConfig, TargetConfig};
 pub use provider::{ProviderConfig, ProviderType};
 pub use rules::{
     EnsureFileConfig, EnsureFileMode, EnsureJsonKeyConfig, EnsureYamlKeyConfig, FileMatchesConfig,
-    JsonKeyMode, RuleDefinition,
+    JsonKeyMode, RepoSettingsConfig, RuleDefinition,
 };
 
 use serde::Deserialize;

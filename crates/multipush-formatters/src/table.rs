@@ -3,9 +3,10 @@ use std::fmt::Write;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
-use multipush_core::engine::executor::ApplyReport;
+use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
-    build_pr_action_map, format_pr_summary, Formatter, PolicyReport, Report, RepoOutcome,
+    build_pr_action_map, format_pr_summary, format_settings_summary, has_settings_actions,
+    Formatter, PolicyReport, RepoOutcome, Report,
 };
 
 #[derive(Tabled)]
@@ -28,6 +29,18 @@ struct ApplyRow {
     action: String,
     #[tabled(rename = "PR")]
     pr: String,
+}
+
+#[derive(Tabled)]
+struct SettingsRow {
+    #[tabled(rename = "Repository")]
+    repo: String,
+    #[tabled(rename = "Policies")]
+    policies: String,
+    #[tabled(rename = "Action")]
+    action: String,
+    #[tabled(rename = "Patch")]
+    patch: String,
 }
 
 pub struct TableFormatter {
@@ -183,20 +196,58 @@ impl Formatter for TableFormatter {
             }
         }
 
+        if has_settings_actions(apply_report) {
+            out.push('\n');
+            writeln!(out, "Repo settings updates:").unwrap();
+            let mut rows: Vec<SettingsRow> = Vec::new();
+            for a in &apply_report.settings_applied {
+                let label = match a.action {
+                    SettingsActionKind::Applied => "settings updated",
+                    SettingsActionKind::DryRun => "would update settings",
+                    SettingsActionKind::Error => "error",
+                };
+                rows.push(SettingsRow {
+                    repo: a.repo_name.clone(),
+                    policies: a.policy_names.join(", "),
+                    action: label.to_string(),
+                    patch: format_patch(&a.patch),
+                });
+            }
+            for a in &apply_report.settings_errored {
+                rows.push(SettingsRow {
+                    repo: a.repo_name.clone(),
+                    policies: a.policy_names.join(", "),
+                    action: a
+                        .error
+                        .clone()
+                        .map(|e| format!("error: {e}"))
+                        .unwrap_or_else(|| "error".to_string()),
+                    patch: format_patch(&a.patch),
+                });
+            }
+            let table = Table::new(rows).with(Style::sharp()).to_string();
+            writeln!(out, "{table}").unwrap();
+        }
+
         let s = &report.summary;
         write!(
             out,
-            "Summary: {} pass, {} fail, {} skip, {} errors | PRs: {}",
+            "Summary: {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {}",
             s.passing,
             s.failing,
             s.skipped,
             s.errors,
             format_pr_summary(apply_report),
+            format_settings_summary(apply_report),
         )
         .unwrap();
 
         Ok(out)
     }
+}
+
+fn format_patch(patch: &multipush_core::model::RepoSettingsPatch) -> String {
+    serde_json::to_string(patch).unwrap_or_else(|_| "<unserializable>".to_string())
 }
 
 #[cfg(test)]
@@ -396,6 +447,8 @@ mod tests {
             prs_skipped: vec![],
             prs_errored: vec![],
             prs_limited: 0,
+            settings_applied: vec![],
+            settings_errored: vec![],
         };
 
         let formatter = TableFormatter::with_color(false);

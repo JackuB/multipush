@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use tracing::{debug, error, info, info_span, warn};
 
 use crate::config::{ExistingPrStrategy, RootConfig};
-use crate::formatter::{Report, RepoOutcome};
-use crate::model::{FileChange, PullRequest, Repo, Visibility};
+use crate::formatter::{RepoOutcome, Report};
+use crate::model::{FileChange, PullRequest, Repo, RepoSettingsPatch, Visibility};
 use crate::provider::Provider;
 use crate::rule::Remediation;
 use crate::Result;
@@ -19,6 +19,26 @@ pub struct ApplyReport {
     pub prs_errored: Vec<PrAction>,
     /// Number of PRs not created because the `max_prs` limit was reached.
     pub prs_limited: usize,
+    pub settings_applied: Vec<SettingsAction>,
+    pub settings_errored: Vec<SettingsAction>,
+}
+
+/// A single repo-settings update taken (or skipped) during apply.
+#[derive(Debug)]
+pub struct SettingsAction {
+    pub repo_name: String,
+    pub policy_names: Vec<String>,
+    pub patch: RepoSettingsPatch,
+    pub action: SettingsActionKind,
+    pub error: Option<String>,
+}
+
+/// What happened to a repo-settings update for a given repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsActionKind {
+    Applied,
+    DryRun,
+    Error,
 }
 
 /// A single PR-related action taken (or skipped) during apply.
@@ -50,18 +70,13 @@ pub async fn execute(
     dry_run: bool,
     max_prs: usize,
 ) -> Result<ApplyReport> {
-    let apply_config = config
-        .defaults
-        .as_ref()
-        .and_then(|d| d.apply.as_ref());
+    let apply_config = config.defaults.as_ref().and_then(|d| d.apply.as_ref());
 
     let pr_prefix = apply_config
         .map(|a| a.pr_prefix.as_str())
         .unwrap_or("multipush");
 
-    let existing_pr_strategy = apply_config
-        .map(|a| a.existing_pr)
-        .unwrap_or_default();
+    let existing_pr_strategy = apply_config.map(|a| a.existing_pr).unwrap_or_default();
 
     let mut prs_created = Vec::new();
     let mut prs_updated = Vec::new();
@@ -70,20 +85,51 @@ pub async fn execute(
     let mut pr_counter: usize = 0;
     let mut prs_limited: usize = 0;
 
+    // Aggregate repo_settings patches per repo across all policies so we can
+    // issue one update_repo_settings call per repo regardless of how many
+    // policies contributed to it.
+    let mut settings_by_repo: HashMap<String, (Repo, RepoSettingsPatch, Vec<String>)> =
+        HashMap::new();
+
     for policy_report in &report.results {
         let policy_name = &policy_report.policy_name;
 
         for repo_result in &policy_report.repo_results {
-            let remediations = match &repo_result.outcome {
-                RepoOutcome::Fail { remediations, .. } if !remediations.is_empty() => {
-                    remediations
-                }
+            let all_remediations = match &repo_result.outcome {
+                RepoOutcome::Fail { remediations, .. } if !remediations.is_empty() => remediations,
                 _ => continue,
             };
 
-            let branch = format!("{pr_prefix}/{policy_name}");
             let repo = build_repo(&repo_result.repo_name, &repo_result.default_branch);
-            let _span = info_span!("apply_repo", repo = %repo.full_name, policy = %policy_name).entered();
+
+            // Collect repo_settings patches separately; they don't flow
+            // through the PR pipeline.
+            for rem in all_remediations {
+                if let Remediation::RepoSettings { patch, .. } = rem {
+                    let entry = settings_by_repo
+                        .entry(repo.full_name.clone())
+                        .or_insert_with(|| {
+                            (repo.clone(), RepoSettingsPatch::default(), Vec::new())
+                        });
+                    entry.1.merge(patch.clone());
+                    if !entry.2.contains(policy_name) {
+                        entry.2.push(policy_name.clone());
+                    }
+                }
+            }
+
+            // Only run the PR flow if this (repo, policy) has file changes.
+            let has_file_changes = all_remediations
+                .iter()
+                .any(|r| matches!(r, Remediation::FileChanges { .. }));
+            if !has_file_changes {
+                continue;
+            }
+            let remediations = all_remediations;
+
+            let branch = format!("{pr_prefix}/{policy_name}");
+            let _span =
+                info_span!("apply_repo", repo = %repo.full_name, policy = %policy_name).entered();
 
             debug!(
                 repo = %repo.full_name,
@@ -277,6 +323,60 @@ pub async fn execute(
         }
     }
 
+    // Apply merged repo-settings patches.
+    let mut settings_applied = Vec::new();
+    let mut settings_errored = Vec::new();
+    for (_, (repo, patch, policy_names)) in settings_by_repo {
+        if patch.is_empty() {
+            continue;
+        }
+        let _span = info_span!("apply_settings", repo = %repo.full_name).entered();
+
+        if dry_run {
+            let json = serde_json::to_string_pretty(&patch)
+                .unwrap_or_else(|_| "<unserializable>".to_string());
+            info!(
+                repo = %repo.full_name,
+                "[dry-run] would update repo settings: {json}"
+            );
+            settings_applied.push(SettingsAction {
+                repo_name: repo.full_name.clone(),
+                policy_names,
+                patch,
+                action: SettingsActionKind::DryRun,
+                error: None,
+            });
+            continue;
+        }
+
+        match provider.update_repo_settings(&repo, &patch).await {
+            Ok(()) => {
+                info!(repo = %repo.full_name, "updated repo settings");
+                settings_applied.push(SettingsAction {
+                    repo_name: repo.full_name.clone(),
+                    policy_names,
+                    patch,
+                    action: SettingsActionKind::Applied,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                error!(
+                    repo = %repo.full_name,
+                    error = %e,
+                    "failed to update repo settings"
+                );
+                settings_errored.push(SettingsAction {
+                    repo_name: repo.full_name.clone(),
+                    policy_names,
+                    patch,
+                    action: SettingsActionKind::Error,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
     Ok(ApplyReport {
         report: report.clone(),
         prs_created,
@@ -284,6 +384,8 @@ pub async fn execute(
         prs_skipped,
         prs_errored,
         prs_limited,
+        settings_applied,
+        settings_errored,
     })
 }
 
@@ -305,7 +407,10 @@ fn build_repo(full_name: &str, default_branch: &str) -> Repo {
 fn collect_changes(remediations: &[Remediation]) -> Vec<FileChange> {
     remediations
         .iter()
-        .flat_map(|r| r.changes.clone())
+        .flat_map(|r| match r {
+            Remediation::FileChanges { changes, .. } => changes.clone(),
+            Remediation::RepoSettings { .. } => Vec::new(),
+        })
         .collect()
 }
 
@@ -329,14 +434,24 @@ fn generate_pr_body(
 
     body.push_str("### Changes\n\n");
     for remediation in remediations {
-        body.push_str(&format!("- {}\n", remediation.description));
-        for change in &remediation.changes {
-            let action = if change.content.is_some() {
-                "create/update"
-            } else {
-                "delete"
-            };
-            body.push_str(&format!("  - `{}` ({action})\n", change.path));
+        match remediation {
+            Remediation::FileChanges {
+                description,
+                changes,
+            } => {
+                body.push_str(&format!("- {description}\n"));
+                for change in changes {
+                    let action = if change.content.is_some() {
+                        "create/update"
+                    } else {
+                        "delete"
+                    };
+                    body.push_str(&format!("  - `{}` ({action})\n", change.path));
+                }
+            }
+            Remediation::RepoSettings { description, .. } => {
+                body.push_str(&format!("- {description}\n"));
+            }
         }
     }
 
@@ -358,10 +473,15 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, true, 10).await.unwrap();
+        let result = execute(&report, &config, &provider, true, 10)
+            .await
+            .unwrap();
 
         assert_eq!(result.prs_created.len(), 2);
-        assert!(result.prs_created.iter().all(|a| a.action == PrActionKind::DryRun));
+        assert!(result
+            .prs_created
+            .iter()
+            .all(|a| a.action == PrActionKind::DryRun));
         assert_eq!(provider.create_pr_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider.update_pr_calls.load(Ordering::SeqCst), 0);
     }
@@ -369,13 +489,13 @@ mod tests {
     #[tokio::test]
     async fn max_prs_limits_creation() {
         let provider = MockProvider::new(vec![]);
-        let report = make_report_with_failures(
-            &["org/a", "org/b", "org/c", "org/d", "org/e"],
-            true,
-        );
+        let report =
+            make_report_with_failures(&["org/a", "org/b", "org/c", "org/d", "org/e"], true);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, false, 2).await.unwrap();
+        let result = execute(&report, &config, &provider, false, 2)
+            .await
+            .unwrap();
 
         assert_eq!(result.prs_created.len(), 2);
         assert_eq!(result.prs_limited, 3);
@@ -419,7 +539,9 @@ mod tests {
             policies: vec![],
         };
 
-        let result = execute(&report, &config, &provider, false, 10).await.unwrap();
+        let result = execute(&report, &config, &provider, false, 10)
+            .await
+            .unwrap();
 
         assert_eq!(result.prs_skipped.len(), 1);
         assert_eq!(result.prs_created.len(), 0);
@@ -442,7 +564,9 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha"], true);
         let config = default_config(); // default strategy is Update
 
-        let result = execute(&report, &config, &provider, false, 10).await.unwrap();
+        let result = execute(&report, &config, &provider, false, 10)
+            .await
+            .unwrap();
 
         assert_eq!(result.prs_updated.len(), 1);
         assert_eq!(result.prs_created.len(), 0);
@@ -455,7 +579,9 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha"], false);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, false, 10).await.unwrap();
+        let result = execute(&report, &config, &provider, false, 10)
+            .await
+            .unwrap();
 
         assert_eq!(result.prs_created.len(), 0);
         assert_eq!(result.prs_limited, 0);
@@ -465,6 +591,7 @@ mod tests {
     #[tokio::test]
     async fn create_pr_error_continues_execution() {
         use crate::error::CoreError;
+        use crate::model::RepoSettingsPatch;
 
         struct FailingMockProvider {
             fail_repo: String,
@@ -473,26 +600,61 @@ mod tests {
 
         #[async_trait]
         impl Provider for FailingMockProvider {
-            fn name(&self) -> &str { "mock" }
-            async fn list_repos(&self, _org: &str) -> Result<Vec<Repo>> { Ok(vec![]) }
-            async fn get_file(&self, _repo: &Repo, _path: &str, _git_ref: &str) -> Result<Option<FileContent>> { Ok(None) }
-            async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> { unimplemented!() }
-            async fn find_open_pr(&self, _repo: &Repo, _head: &str) -> Result<Option<PullRequest>> { Ok(None) }
+            fn name(&self) -> &str {
+                "mock"
+            }
+            async fn list_repos(&self, _org: &str) -> Result<Vec<Repo>> {
+                Ok(vec![])
+            }
+            async fn get_file(
+                &self,
+                _repo: &Repo,
+                _path: &str,
+                _git_ref: &str,
+            ) -> Result<Option<FileContent>> {
+                Ok(None)
+            }
+            async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> {
+                unimplemented!()
+            }
+            async fn find_open_pr(&self, _repo: &Repo, _head: &str) -> Result<Option<PullRequest>> {
+                Ok(None)
+            }
             async fn create_pr(
-                &self, repo: &Repo, branch: &str, _base: &str, title: &str, _body: &str, _changes: Vec<FileChange>,
+                &self,
+                repo: &Repo,
+                branch: &str,
+                _base: &str,
+                title: &str,
+                _body: &str,
+                _changes: Vec<FileChange>,
             ) -> Result<PullRequest> {
                 if repo.full_name == self.fail_repo {
                     return Err(CoreError::Provider("API error".into()));
                 }
                 let n = self.create_pr_calls.fetch_add(1, Ordering::SeqCst) as u64 + 1;
                 Ok(PullRequest {
-                    number: n, title: title.to_string(), head_branch: branch.to_string(),
+                    number: n,
+                    title: title.to_string(),
+                    head_branch: branch.to_string(),
                     url: format!("https://github.com/{}/pull/{n}", repo.full_name),
                     state: PrState::Open,
                 })
             }
-            async fn update_pr(&self, _repo: &Repo, pr: &PullRequest, _changes: Vec<FileChange>) -> Result<PullRequest> {
+            async fn update_pr(
+                &self,
+                _repo: &Repo,
+                pr: &PullRequest,
+                _changes: Vec<FileChange>,
+            ) -> Result<PullRequest> {
                 Ok(pr.clone())
+            }
+            async fn update_repo_settings(
+                &self,
+                _repo: &Repo,
+                _patch: &RepoSettingsPatch,
+            ) -> Result<()> {
+                unimplemented!()
             }
         }
 
@@ -503,7 +665,9 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, false, 10).await.unwrap();
+        let result = execute(&report, &config, &provider, false, 10)
+            .await
+            .unwrap();
 
         assert_eq!(result.prs_errored.len(), 1);
         assert_eq!(result.prs_errored[0].repo_name, "org/alpha");
@@ -515,7 +679,7 @@ mod tests {
 
     #[test]
     fn generate_pr_body_format() {
-        let remediations = vec![Remediation {
+        let remediations = vec![Remediation::FileChanges {
             description: "Create LICENSE file".to_string(),
             changes: vec![FileChange {
                 path: "LICENSE".to_string(),

@@ -26,7 +26,7 @@ impl EnsureJsonKeyRule {
             return None;
         }
         let new_content = serde_json::to_string_pretty(&root).ok()?;
-        Some(Remediation {
+        Some(Remediation::FileChanges {
             description: format!(
                 "Set key `{}` in {} to expected value",
                 self.config.key, self.config.path
@@ -50,10 +50,7 @@ impl Rule for EnsureJsonKeyRule {
     }
 
     fn description(&self) -> String {
-        format!(
-            "Ensure key `{}` in {}",
-            self.config.key, self.config.path
-        )
+        format!("Ensure key `{}` in {}", self.config.key, self.config.path)
     }
 
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> multipush_core::Result<RuleResult> {
@@ -96,26 +93,24 @@ impl Rule for EnsureJsonKeyRule {
                     remediation,
                 })
             }
-            Some(actual) => {
-                match &self.config.value {
-                    None => Ok(RuleResult::Pass {
-                        detail: format!("Key `{key}` exists in {path}"),
-                    }),
-                    Some(expected) => {
-                        if actual == expected {
-                            Ok(RuleResult::Pass {
-                                detail: format!("Key `{key}` in {path} has expected value"),
-                            })
-                        } else {
-                            let remediation = self.build_remediation(root);
-                            Ok(RuleResult::Fail {
-                                detail: format!("Key `{key}` in {path} has unexpected value"),
-                                remediation,
-                            })
-                        }
+            Some(actual) => match &self.config.value {
+                None => Ok(RuleResult::Pass {
+                    detail: format!("Key `{key}` exists in {path}"),
+                }),
+                Some(expected) => {
+                    if actual == expected {
+                        Ok(RuleResult::Pass {
+                            detail: format!("Key `{key}` in {path} has expected value"),
+                        })
+                    } else {
+                        let remediation = self.build_remediation(root);
+                        Ok(RuleResult::Fail {
+                            detail: format!("Key `{key}` in {path} has unexpected value"),
+                            remediation,
+                        })
                     }
                 }
-            }
+            },
         }
     }
 }
@@ -123,7 +118,9 @@ impl Rule for EnsureJsonKeyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use multipush_core::model::{FileContent, PullRequest, Repo, RepoSettings, Visibility};
+    use multipush_core::model::{
+        FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Visibility,
+    };
     use multipush_core::provider::Provider;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -171,10 +168,7 @@ mod tests {
             Ok(self.files.lock().unwrap().get(path).cloned())
         }
 
-        async fn get_repo_settings(
-            &self,
-            _repo: &Repo,
-        ) -> multipush_core::Result<RepoSettings> {
+        async fn get_repo_settings(&self, _repo: &Repo) -> multipush_core::Result<RepoSettings> {
             unimplemented!()
         }
 
@@ -204,6 +198,14 @@ mod tests {
             _pr: &PullRequest,
             _changes: Vec<FileChange>,
         ) -> multipush_core::Result<PullRequest> {
+            unimplemented!()
+        }
+
+        async fn update_repo_settings(
+            &self,
+            _repo: &Repo,
+            _patch: &RepoSettingsPatch,
+        ) -> multipush_core::Result<()> {
             unimplemented!()
         }
     }
@@ -238,7 +240,13 @@ mod tests {
             repo: &repo,
         };
         let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Fail { remediation: None, .. }));
+        assert!(matches!(
+            result,
+            RuleResult::Fail {
+                remediation: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -260,10 +268,15 @@ mod tests {
         match result {
             RuleResult::Fail { remediation, .. } => {
                 let rem = remediation.unwrap();
-                assert_eq!(rem.changes.len(), 1);
-                let content = rem.changes[0].content.as_deref().unwrap();
-                let parsed: Value = serde_json::from_str(content).unwrap();
-                assert_eq!(parsed["name"], serde_json::json!("my-pkg"));
+                match rem {
+                    Remediation::FileChanges { changes, .. } => {
+                        assert_eq!(changes.len(), 1);
+                        let content = changes[0].content.as_deref().unwrap();
+                        let parsed: Value = serde_json::from_str(content).unwrap();
+                        assert_eq!(parsed["name"], serde_json::json!("my-pkg"));
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }
@@ -271,8 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_present_value_matches() {
-        let provider = TestProvider::new()
-            .with_file("package.json", r#"{"name": "my-pkg"}"#);
+        let provider = TestProvider::new().with_file("package.json", r#"{"name": "my-pkg"}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "package.json".to_string(),
@@ -291,8 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_present_value_mismatch_check_only() {
-        let provider = TestProvider::new()
-            .with_file("package.json", r#"{"name": "wrong"}"#);
+        let provider = TestProvider::new().with_file("package.json", r#"{"name": "wrong"}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "package.json".to_string(),
@@ -306,13 +317,18 @@ mod tests {
             repo: &repo,
         };
         let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Fail { remediation: None, .. }));
+        assert!(matches!(
+            result,
+            RuleResult::Fail {
+                remediation: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
     async fn key_present_value_mismatch_enforce() {
-        let provider = TestProvider::new()
-            .with_file("package.json", r#"{"name": "wrong"}"#);
+        let provider = TestProvider::new().with_file("package.json", r#"{"name": "wrong"}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "package.json".to_string(),
@@ -329,9 +345,14 @@ mod tests {
         match result {
             RuleResult::Fail { remediation, .. } => {
                 let rem = remediation.unwrap();
-                let content = rem.changes[0].content.as_deref().unwrap();
-                let parsed: Value = serde_json::from_str(content).unwrap();
-                assert_eq!(parsed["name"], serde_json::json!("expected"));
+                match rem {
+                    Remediation::FileChanges { changes, .. } => {
+                        let content = changes[0].content.as_deref().unwrap();
+                        let parsed: Value = serde_json::from_str(content).unwrap();
+                        assert_eq!(parsed["name"], serde_json::json!("expected"));
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }
@@ -339,8 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_missing_check_only() {
-        let provider = TestProvider::new()
-            .with_file("package.json", r#"{"version": "1.0"}"#);
+        let provider = TestProvider::new().with_file("package.json", r#"{"version": "1.0"}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "package.json".to_string(),
@@ -354,13 +374,18 @@ mod tests {
             repo: &repo,
         };
         let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Fail { remediation: None, .. }));
+        assert!(matches!(
+            result,
+            RuleResult::Fail {
+                remediation: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
     async fn key_missing_enforce() {
-        let provider = TestProvider::new()
-            .with_file("package.json", r#"{"version": "1.0"}"#);
+        let provider = TestProvider::new().with_file("package.json", r#"{"version": "1.0"}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "package.json".to_string(),
@@ -377,10 +402,15 @@ mod tests {
         match result {
             RuleResult::Fail { remediation, .. } => {
                 let rem = remediation.unwrap();
-                let content = rem.changes[0].content.as_deref().unwrap();
-                let parsed: Value = serde_json::from_str(content).unwrap();
-                assert_eq!(parsed["name"], serde_json::json!("my-pkg"));
-                assert_eq!(parsed["version"], serde_json::json!("1.0"));
+                match rem {
+                    Remediation::FileChanges { changes, .. } => {
+                        let content = changes[0].content.as_deref().unwrap();
+                        let parsed: Value = serde_json::from_str(content).unwrap();
+                        assert_eq!(parsed["name"], serde_json::json!("my-pkg"));
+                        assert_eq!(parsed["version"], serde_json::json!("1.0"));
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }
@@ -388,8 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn nested_key() {
-        let provider = TestProvider::new()
-            .with_file("config.json", r#"{"a": {"b": {"c": 42}}}"#);
+        let provider = TestProvider::new().with_file("config.json", r#"{"a": {"b": {"c": 42}}}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "config.json".to_string(),
@@ -408,8 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_json() {
-        let provider = TestProvider::new()
-            .with_file("bad.json", "not json{{{");
+        let provider = TestProvider::new().with_file("bad.json", "not json{{{");
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "bad.json".to_string(),
@@ -424,7 +452,10 @@ mod tests {
         };
         let result = rule.evaluate(&ctx).await.unwrap();
         match result {
-            RuleResult::Fail { detail, remediation } => {
+            RuleResult::Fail {
+                detail,
+                remediation,
+            } => {
                 assert!(detail.contains("not valid JSON"));
                 assert!(remediation.is_none());
             }
@@ -434,8 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_exists_no_expected_value() {
-        let provider = TestProvider::new()
-            .with_file("package.json", r#"{"name": "anything"}"#);
+        let provider = TestProvider::new().with_file("package.json", r#"{"name": "anything"}"#);
         let repo = test_repo();
         let rule = EnsureJsonKeyRule::new(EnsureJsonKeyConfig {
             path: "package.json".to_string(),

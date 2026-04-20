@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FileChange, Repo};
+use crate::model::{FileChange, Repo, RepoSettingsPatch};
 use crate::provider::Provider;
 use crate::Result;
 
@@ -10,29 +10,39 @@ use crate::Result;
 #[derive(Debug, Clone)]
 pub enum RuleResult {
     /// The repository satisfies the rule.
-    Pass {
-        detail: String,
-    },
+    Pass { detail: String },
     /// The repository violates the rule, with an optional remediation.
     Fail {
         detail: String,
         remediation: Option<Remediation>,
     },
     /// The rule was not applicable to this repository.
-    Skip {
-        reason: String,
-    },
+    Skip { reason: String },
     /// An error occurred during evaluation.
-    Error {
-        message: String,
+    Error { message: String },
+}
+
+/// A remediation that can fix a rule violation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Remediation {
+    FileChanges {
+        description: String,
+        changes: Vec<FileChange>,
+    },
+    RepoSettings {
+        description: String,
+        patch: RepoSettingsPatch,
     },
 }
 
-/// A set of file changes that can fix a rule violation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Remediation {
-    pub description: String,
-    pub changes: Vec<FileChange>,
+impl Remediation {
+    pub fn description(&self) -> &str {
+        match self {
+            Self::FileChanges { description, .. } => description,
+            Self::RepoSettings { description, .. } => description,
+        }
+    }
 }
 
 /// Context passed to each rule evaluation, providing access to the

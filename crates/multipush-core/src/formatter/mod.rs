@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::executor::{ApplyReport, PrAction, PrActionKind};
+use crate::engine::executor::{ApplyReport, PrAction, PrActionKind, SettingsActionKind};
 use crate::model::Severity;
 use crate::rule::Remediation;
 use crate::Result;
@@ -62,7 +62,9 @@ pub struct Summary {
 }
 
 /// Build a lookup from (repo_name, policy_name) to (action_label, pr_url) for apply reports.
-pub fn build_pr_action_map(report: &ApplyReport) -> std::collections::HashMap<(String, String), (String, String)> {
+pub fn build_pr_action_map(
+    report: &ApplyReport,
+) -> std::collections::HashMap<(String, String), (String, String)> {
     let mut map = std::collections::HashMap::new();
 
     fn insert_actions(
@@ -99,28 +101,95 @@ pub fn build_pr_action_map(report: &ApplyReport) -> std::collections::HashMap<(S
 
 /// Build the PR summary line for apply reports.
 pub fn format_pr_summary(report: &ApplyReport) -> String {
-    let created = report.prs_created.iter().filter(|a| a.action == PrActionKind::Created).count();
-    let would_create = report.prs_created.iter().filter(|a| a.action == PrActionKind::DryRun).count();
-    let updated = report.prs_updated.iter().filter(|a| a.action == PrActionKind::Updated).count();
-    let would_update = report.prs_updated.iter().filter(|a| a.action == PrActionKind::DryRun).count();
+    let created = report
+        .prs_created
+        .iter()
+        .filter(|a| a.action == PrActionKind::Created)
+        .count();
+    let would_create = report
+        .prs_created
+        .iter()
+        .filter(|a| a.action == PrActionKind::DryRun)
+        .count();
+    let updated = report
+        .prs_updated
+        .iter()
+        .filter(|a| a.action == PrActionKind::Updated)
+        .count();
+    let would_update = report
+        .prs_updated
+        .iter()
+        .filter(|a| a.action == PrActionKind::DryRun)
+        .count();
     let skipped = report.prs_skipped.len();
     let limited = report.prs_limited;
 
     let mut parts = Vec::new();
-    if created > 0 { parts.push(format!("{created} created")); }
-    if would_create > 0 { parts.push(format!("{would_create} would create")); }
-    if updated > 0 { parts.push(format!("{updated} updated")); }
-    if would_update > 0 { parts.push(format!("{would_update} would update")); }
-    if skipped > 0 { parts.push(format!("{skipped} skipped")); }
-    if limited > 0 { parts.push(format!("{limited} limited (max-prs)")); }
+    if created > 0 {
+        parts.push(format!("{created} created"));
+    }
+    if would_create > 0 {
+        parts.push(format!("{would_create} would create"));
+    }
+    if updated > 0 {
+        parts.push(format!("{updated} updated"));
+    }
+    if would_update > 0 {
+        parts.push(format!("{would_update} would update"));
+    }
+    if skipped > 0 {
+        parts.push(format!("{skipped} skipped"));
+    }
+    if limited > 0 {
+        parts.push(format!("{limited} limited (max-prs)"));
+    }
     let errored = report.prs_errored.len();
-    if errored > 0 { parts.push(format!("{errored} errored")); }
+    if errored > 0 {
+        parts.push(format!("{errored} errored"));
+    }
 
     if parts.is_empty() {
         "0 actions".to_string()
     } else {
         parts.join(", ")
     }
+}
+
+/// Build the settings-action summary line for apply reports.
+pub fn format_settings_summary(report: &ApplyReport) -> String {
+    let applied = report
+        .settings_applied
+        .iter()
+        .filter(|a| a.action == SettingsActionKind::Applied)
+        .count();
+    let would_apply = report
+        .settings_applied
+        .iter()
+        .filter(|a| a.action == SettingsActionKind::DryRun)
+        .count();
+    let errored = report.settings_errored.len();
+
+    let mut parts = Vec::new();
+    if applied > 0 {
+        parts.push(format!("{applied} applied"));
+    }
+    if would_apply > 0 {
+        parts.push(format!("{would_apply} would apply"));
+    }
+    if errored > 0 {
+        parts.push(format!("{errored} errored"));
+    }
+
+    if parts.is_empty() {
+        "0 actions".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// True if the apply report has any settings actions (applied, would-apply, or errored).
+pub fn has_settings_actions(report: &ApplyReport) -> bool {
+    !report.settings_applied.is_empty() || !report.settings_errored.is_empty()
 }
 
 /// Renders a [`Report`] or [`ApplyReport`] into a human-readable string.

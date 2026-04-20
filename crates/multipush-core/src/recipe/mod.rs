@@ -211,10 +211,7 @@ fn template_substitute(template: &str, params: &HashMap<String, String>) -> Stri
             // Find the indentation level of this line
             let line_start = template[..m.start()].rfind('\n').map_or(0, |n| n + 1);
             let prefix = &template[line_start..m.start()];
-            let indent: String = prefix
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect();
+            let indent: String = prefix.chars().take_while(|c| c.is_whitespace()).collect();
 
             // Indent subsequent lines of the replacement value
             let mut lines = value.split('\n');
@@ -246,10 +243,7 @@ fn get_string(mapping: &Mapping, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn parse_params(
-    mapping: &Mapping,
-    recipe_name: &str,
-) -> Result<IndexMap<String, ParamDef>> {
+fn parse_params(mapping: &Mapping, recipe_name: &str) -> Result<IndexMap<String, ParamDef>> {
     let mut params = IndexMap::new();
 
     let params_val = match mapping.get(Value::String("params".into())) {
@@ -258,7 +252,9 @@ fn parse_params(
     };
 
     let params_map = params_val.as_mapping().ok_or_else(|| {
-        CoreError::Recipe(format!("recipe '{recipe_name}': 'params' must be a mapping"))
+        CoreError::Recipe(format!(
+            "recipe '{recipe_name}': 'params' must be a mapping"
+        ))
     })?;
 
     for (key, val) in params_map {
@@ -473,7 +469,9 @@ rules:
         let params = HashMap::new();
 
         let err = recipe.expand(&params).unwrap_err();
-        assert!(err.to_string().contains("missing required parameter 'owner'"));
+        assert!(err
+            .to_string()
+            .contains("missing required parameter 'owner'"));
     }
 
     #[test]

@@ -1,0 +1,29 @@
+# Repo-settings policy example
+#
+# Demonstrates the `repo_settings` rule, which governs GitHub repository
+# features directly via the API (not via PRs). Only fields you list are
+# enforced; unspecified fields are left untouched.
+#
+# Usage:
+#   export GITHUB_ORG=my-org
+#   export GITHUB_TOKEN=ghp_...
+#   multipush check -c examples/repo-settings.yml
+#   multipush apply --dry-run -c examples/repo-settings.yml
+#   multipush apply -c examples/repo-settings.yml
+
+provider:
+  type: github
+  org: ${GITHUB_ORG}
+  token: ${GITHUB_TOKEN}
+
+policies:
+  - name: standardize-repo-features
+    description: Disable wiki/projects and enforce branch cleanup on merge
+    severity: warning
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !repo_settings
+        has_wiki: false
+        has_projects: false
+        delete_branch_on_merge: true

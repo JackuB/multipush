@@ -7,6 +7,7 @@ pub enum RuleDefinition {
     EnsureJsonKey(EnsureJsonKeyConfig),
     EnsureYamlKey(EnsureYamlKeyConfig),
     FileMatches(FileMatchesConfig),
+    RepoSettings(RepoSettingsConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,4 +61,27 @@ pub struct EnsureYamlKeyConfig {
 pub struct FileMatchesConfig {
     pub path: String,
     pub pattern: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepoSettingsConfig {
+    #[serde(default)]
+    pub has_issues: Option<bool>,
+    #[serde(default)]
+    pub has_wiki: Option<bool>,
+    #[serde(default)]
+    pub has_projects: Option<bool>,
+    #[serde(default)]
+    pub allow_merge_commit: Option<bool>,
+    #[serde(default)]
+    pub allow_squash_merge: Option<bool>,
+    #[serde(default)]
+    pub allow_rebase_merge: Option<bool>,
+    #[serde(default)]
+    pub delete_branch_on_merge: Option<bool>,
+    #[serde(default)]
+    pub allow_auto_merge: Option<bool>,
+    #[serde(default)]
+    pub default_branch: Option<String>,
 }

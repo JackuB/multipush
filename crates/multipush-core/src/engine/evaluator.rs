@@ -2,7 +2,7 @@ use futures::stream::{self, StreamExt};
 use tracing::{error, info, info_span, Instrument};
 
 use crate::config::{PolicyConfig, RootConfig};
-use crate::formatter::{PolicyReport, Report, RepoOutcome, RepoResult, Summary};
+use crate::formatter::{PolicyReport, RepoOutcome, RepoResult, Report, Summary};
 use crate::model::Repo;
 use crate::provider::Provider;
 use crate::rule::{Rule, RuleContext, RuleResult};
@@ -40,10 +40,7 @@ where
         let repo_results: Vec<RepoResult> = stream::iter(targeted.iter().map(|repo| {
             let rules = &rules;
             let span = info_span!("repo", name = %repo.full_name);
-            async move {
-                evaluate_repo(provider, repo, rules).await
-            }
-            .instrument(span)
+            async move { evaluate_repo(provider, repo, rules).await }.instrument(span)
         }))
         .buffer_unordered(concurrency)
         .collect()
@@ -159,10 +156,7 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        EnsureFileConfig, EnsureFileMode, RuleDefinition,
-        TargetConfig,
-    };
+    use crate::config::{EnsureFileConfig, EnsureFileMode, RuleDefinition, TargetConfig};
     use crate::testing::{make_repo, test_config, MockProvider};
     use async_trait::async_trait;
 
@@ -234,7 +228,9 @@ mod tests {
             })],
         }]);
 
-        let report = evaluate(&config, &provider, simple_factory, 10).await.unwrap();
+        let report = evaluate(&config, &provider, simple_factory, 10)
+            .await
+            .unwrap();
         assert_eq!(report.summary.passing, 1);
         assert_eq!(report.summary.failing, 0);
     }
@@ -261,7 +257,9 @@ mod tests {
             })],
         }]);
 
-        let report = evaluate(&config, &provider, simple_factory, 10).await.unwrap();
+        let report = evaluate(&config, &provider, simple_factory, 10)
+            .await
+            .unwrap();
         assert_eq!(report.summary.passing, 0);
         assert_eq!(report.summary.failing, 1);
     }
@@ -269,12 +267,8 @@ mod tests {
     #[test]
     fn aggregate_all_pass() {
         let outcomes = vec![
-            RuleResult::Pass {
-                detail: "a".into(),
-            },
-            RuleResult::Pass {
-                detail: "b".into(),
-            },
+            RuleResult::Pass { detail: "a".into() },
+            RuleResult::Pass { detail: "b".into() },
         ];
         match aggregate_outcomes(&outcomes) {
             RepoOutcome::Pass { detail } => assert!(detail.contains("a") && detail.contains("b")),

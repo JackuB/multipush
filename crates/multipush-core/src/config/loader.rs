@@ -247,8 +247,7 @@ fn dedup_policies(merged: &mut Value) {
         policies.retain(|policy| {
             let idx = i;
             i += 1;
-            let is_named =
-                matches!(policy, Value::Mapping(m) if m.contains_key(&name_key));
+            let is_named = matches!(policy, Value::Mapping(m) if m.contains_key(&name_key));
             if is_named {
                 keep_named.contains(&idx)
             } else {
@@ -264,10 +263,8 @@ fn dedup_policies(merged: &mut Value) {
 
 fn expand_recipes(merged: &mut Value) -> Result<()> {
     let recipes = builtin_recipes()?;
-    let recipe_map: HashMap<String, Recipe> = recipes
-        .into_iter()
-        .map(|r| (r.name.clone(), r))
-        .collect();
+    let recipe_map: HashMap<String, Recipe> =
+        recipes.into_iter().map(|r| (r.name.clone(), r)).collect();
 
     let policies = match merged {
         Value::Mapping(m) => match m.get_mut(Value::String("policies".into())) {
@@ -290,11 +287,7 @@ fn expand_recipes(merged: &mut Value) -> Result<()> {
         // Check if this policy uses a recipe
         let recipe_name = match policy_map.get(Value::String("recipe".into())) {
             Some(Value::String(name)) => name.clone(),
-            Some(_) => {
-                return Err(CoreError::Recipe(
-                    "'recipe' field must be a string".into(),
-                ))
-            }
+            Some(_) => return Err(CoreError::Recipe("'recipe' field must be a string".into())),
             None => {
                 expanded.push(policy_val.clone());
                 continue;
@@ -338,10 +331,7 @@ fn expand_recipes(merged: &mut Value) -> Result<()> {
 
     // Replace policies with expanded versions
     if let Value::Mapping(m) = merged {
-        m.insert(
-            Value::String("policies".into()),
-            Value::Sequence(expanded),
-        );
+        m.insert(Value::String("policies".into()), Value::Sequence(expanded));
     }
 
     Ok(())
@@ -467,6 +457,29 @@ fn validate_rule(
                 errors.push(format!("{ctx}: file_matches.pattern is invalid regex: {e}"));
             }
         }
+        RuleDefinition::RepoSettings(cfg) => {
+            let all_none = cfg.has_issues.is_none()
+                && cfg.has_wiki.is_none()
+                && cfg.has_projects.is_none()
+                && cfg.allow_merge_commit.is_none()
+                && cfg.allow_squash_merge.is_none()
+                && cfg.allow_rebase_merge.is_none()
+                && cfg.delete_branch_on_merge.is_none()
+                && cfg.allow_auto_merge.is_none()
+                && cfg.default_branch.is_none();
+            if all_none {
+                errors.push(format!(
+                    "{ctx}: repo_settings rule must set at least one field"
+                ));
+            }
+            if let Some(ref b) = cfg.default_branch {
+                if b.is_empty() {
+                    errors.push(format!(
+                        "{ctx}: repo_settings.default_branch must not be empty"
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -493,6 +506,7 @@ fn suggest_rule_type(unknown: &str) -> Option<String> {
         "ensure_json_key",
         "ensure_yaml_key",
         "file_matches",
+        "repo_settings",
     ];
     let mut best: Option<(&str, usize)> = None;
     for &k in KNOWN {
@@ -724,8 +738,14 @@ policies:
 "#;
         let err = load_single(yaml).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("ensure_file.path must not be empty"), "got: {msg}");
-        assert!(msg.contains("file_matches.pattern is invalid regex"), "got: {msg}");
+        assert!(
+            msg.contains("ensure_file.path must not be empty"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("file_matches.pattern is invalid regex"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -931,9 +951,18 @@ provider:
         let overlay = serde_yaml_ng::from_str::<Value>("b: 3\nc: 4").unwrap();
         let merged = deep_merge(base, overlay);
         let m = merged.as_mapping().unwrap();
-        assert_eq!(m.get(&Value::String("a".into())), Some(&Value::Number(1.into())));
-        assert_eq!(m.get(&Value::String("b".into())), Some(&Value::Number(3.into())));
-        assert_eq!(m.get(&Value::String("c".into())), Some(&Value::Number(4.into())));
+        assert_eq!(
+            m.get(&Value::String("a".into())),
+            Some(&Value::Number(1.into()))
+        );
+        assert_eq!(
+            m.get(&Value::String("b".into())),
+            Some(&Value::Number(3.into()))
+        );
+        assert_eq!(
+            m.get(&Value::String("c".into())),
+            Some(&Value::Number(4.into()))
+        );
     }
 
     #[test]

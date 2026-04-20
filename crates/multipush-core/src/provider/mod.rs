@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::model::{FileChange, FileContent, PullRequest, Repo, RepoSettings};
+use crate::model::{FileChange, FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch};
 use crate::Result;
 
 /// Backend for interacting with a Git hosting platform (e.g. GitHub).
@@ -25,11 +25,7 @@ pub trait Provider: Send + Sync {
     async fn get_repo_settings(&self, repo: &Repo) -> Result<RepoSettings>;
 
     /// Find an open pull request whose head branch matches `head_branch`.
-    async fn find_open_pr(
-        &self,
-        repo: &Repo,
-        head_branch: &str,
-    ) -> Result<Option<PullRequest>>;
+    async fn find_open_pr(&self, repo: &Repo, head_branch: &str) -> Result<Option<PullRequest>>;
 
     /// Create a new pull request with the given file changes.
     async fn create_pr(
@@ -49,4 +45,7 @@ pub trait Provider: Send + Sync {
         pr: &PullRequest,
         changes: Vec<FileChange>,
     ) -> Result<PullRequest>;
+
+    /// Apply a partial update to repository-level settings.
+    async fn update_repo_settings(&self, repo: &Repo, patch: &RepoSettingsPatch) -> Result<()>;
 }

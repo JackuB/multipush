@@ -1,8 +1,9 @@
 use std::fmt::Write;
 
-use multipush_core::engine::executor::ApplyReport;
+use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
-    build_pr_action_map, format_pr_summary, Formatter, PolicyReport, Report, RepoOutcome,
+    build_pr_action_map, format_pr_summary, format_settings_summary, has_settings_actions,
+    Formatter, PolicyReport, RepoOutcome, Report,
 };
 
 pub struct MarkdownFormatter;
@@ -135,15 +136,50 @@ impl Formatter for MarkdownFormatter {
             out.push('\n');
         }
 
+        if has_settings_actions(apply_report) {
+            writeln!(out, "## Repo settings updates\n").unwrap();
+            writeln!(out, "| Repository | Policies | Action | Patch |").unwrap();
+            writeln!(out, "|---|---|---|---|").unwrap();
+            for a in &apply_report.settings_applied {
+                let label = match a.action {
+                    SettingsActionKind::Applied => "settings updated",
+                    SettingsActionKind::DryRun => "would update settings",
+                    SettingsActionKind::Error => "error",
+                };
+                writeln!(
+                    out,
+                    "| {} | {} | {} | `{}` |",
+                    a.repo_name,
+                    a.policy_names.join(", "),
+                    label,
+                    serde_json::to_string(&a.patch).unwrap_or_default(),
+                )
+                .unwrap();
+            }
+            for a in &apply_report.settings_errored {
+                writeln!(
+                    out,
+                    "| {} | {} | error: {} | `{}` |",
+                    a.repo_name,
+                    a.policy_names.join(", "),
+                    a.error.as_deref().unwrap_or("unknown"),
+                    serde_json::to_string(&a.patch).unwrap_or_default(),
+                )
+                .unwrap();
+            }
+            out.push('\n');
+        }
+
         let s = &report.summary;
         write!(
             out,
-            "**Summary:** {} pass, {} fail, {} skip, {} errors | PRs: {}",
+            "**Summary:** {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {}",
             s.passing,
             s.failing,
             s.skipped,
             s.errors,
             format_pr_summary(apply_report),
+            format_settings_summary(apply_report),
         )
         .unwrap();
 
@@ -154,8 +190,8 @@ impl Formatter for MarkdownFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use multipush_core::formatter::{RepoResult, Summary};
     use multipush_core::engine::executor::{PrAction, PrActionKind};
+    use multipush_core::formatter::{RepoResult, Summary};
     use multipush_core::model::{PrState, PullRequest, Severity};
 
     fn make_check_report() -> Report {
@@ -229,6 +265,8 @@ mod tests {
             prs_skipped: vec![],
             prs_errored: vec![],
             prs_limited: 0,
+            settings_applied: vec![],
+            settings_errored: vec![],
         };
 
         let formatter = MarkdownFormatter::new();

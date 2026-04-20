@@ -47,7 +47,7 @@ impl Rule for EnsureFileRule {
 
                 Ok(RuleResult::Fail {
                     detail: format!("File {path} does not exist"),
-                    remediation: Some(Remediation {
+                    remediation: Some(Remediation::FileChanges {
                         description: format!("Create file {path}"),
                         changes,
                     }),
@@ -69,7 +69,7 @@ impl Rule for EnsureFileRule {
                         } else {
                             Ok(RuleResult::Fail {
                                 detail: format!("File {path} content does not match expected"),
-                                remediation: Some(Remediation {
+                                remediation: Some(Remediation::FileChanges {
                                     description: format!(
                                         "Update file {path} to match expected content"
                                     ),
@@ -94,9 +94,7 @@ impl Rule for EnsureFileRule {
                             })
                         } else {
                             Ok(RuleResult::Fail {
-                                detail: format!(
-                                    "File {path} does not contain expected content"
-                                ),
+                                detail: format!("File {path} does not contain expected content"),
                                 remediation: None,
                             })
                         }
@@ -110,7 +108,9 @@ impl Rule for EnsureFileRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use multipush_core::model::{FileContent, PullRequest, Repo, RepoSettings, Visibility};
+    use multipush_core::model::{
+        FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Visibility,
+    };
     use multipush_core::provider::Provider;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -158,10 +158,7 @@ mod tests {
             Ok(self.files.lock().unwrap().get(path).cloned())
         }
 
-        async fn get_repo_settings(
-            &self,
-            _repo: &Repo,
-        ) -> multipush_core::Result<RepoSettings> {
+        async fn get_repo_settings(&self, _repo: &Repo) -> multipush_core::Result<RepoSettings> {
             unimplemented!()
         }
 
@@ -191,6 +188,14 @@ mod tests {
             _pr: &PullRequest,
             _changes: Vec<FileChange>,
         ) -> multipush_core::Result<PullRequest> {
+            unimplemented!()
+        }
+
+        async fn update_repo_settings(
+            &self,
+            _repo: &Repo,
+            _patch: &RepoSettingsPatch,
+        ) -> multipush_core::Result<()> {
             unimplemented!()
         }
     }
@@ -232,7 +237,10 @@ mod tests {
             } => {
                 assert!(detail.contains("does not exist"));
                 let rem = remediation.unwrap();
-                assert!(rem.changes.is_empty());
+                match rem {
+                    Remediation::FileChanges { changes, .. } => assert!(changes.is_empty()),
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }
@@ -261,12 +269,14 @@ mod tests {
             } => {
                 assert!(detail.contains("does not exist"));
                 let rem = remediation.unwrap();
-                assert_eq!(rem.changes.len(), 1);
-                assert_eq!(rem.changes[0].path, "LICENSE");
-                assert_eq!(
-                    rem.changes[0].content.as_deref(),
-                    Some("MIT License")
-                );
+                match rem {
+                    Remediation::FileChanges { changes, .. } => {
+                        assert_eq!(changes.len(), 1);
+                        assert_eq!(changes[0].path, "LICENSE");
+                        assert_eq!(changes[0].content.as_deref(), Some("MIT License"));
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }
@@ -343,11 +353,13 @@ mod tests {
             } => {
                 assert!(detail.contains("does not match"));
                 let rem = remediation.unwrap();
-                assert_eq!(rem.changes.len(), 1);
-                assert_eq!(
-                    rem.changes[0].content.as_deref(),
-                    Some("MIT License")
-                );
+                match rem {
+                    Remediation::FileChanges { changes, .. } => {
+                        assert_eq!(changes.len(), 1);
+                        assert_eq!(changes[0].content.as_deref(), Some("MIT License"));
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }
@@ -355,8 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_exists_contains_present() {
-        let provider =
-            TestProvider::new().with_file(".gitignore", "target/\nnode_modules/\n");
+        let provider = TestProvider::new().with_file(".gitignore", "target/\nnode_modules/\n");
         let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
             path: ".gitignore".to_string(),
