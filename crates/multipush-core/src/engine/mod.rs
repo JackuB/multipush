@@ -6,4 +6,4 @@ pub use evaluator::evaluate;
 pub use executor::{
     execute, ApplyReport, PrAction, PrActionKind, SettingsAction, SettingsActionKind,
 };
-pub use targeting::filter_repos;
+pub use targeting::{filter_repos, filter_repos_basic};

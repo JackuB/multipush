@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use tracing::error;
 
 use multipush_core::config::{load_config, ConfigSource};
-use multipush_core::engine::{evaluate, execute};
+use multipush_core::engine::{evaluate, execute, filter_repos};
 use multipush_core::formatter::RepoOutcome;
 use multipush_core::model::Severity;
 use multipush_core::recipe::builtin::builtin_recipes;
@@ -79,6 +79,25 @@ enum Command {
         verbose: u8,
 
         /// Show only names
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// List repositories targeted by the loaded policies
+    ListRepos {
+        /// Config file or directory (repeatable)
+        #[arg(short, long)]
+        config: Vec<PathBuf>,
+
+        /// Filter to a single policy
+        #[arg(short, long)]
+        policy: Option<String>,
+
+        /// Increase verbosity (-v = info, -vv = debug, -vvv = trace)
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbose: u8,
+
+        /// Suppress output except errors
         #[arg(short, long)]
         quiet: bool,
     },
@@ -188,6 +207,21 @@ fn main() -> ExitCode {
             init_tracing(verbose, quiet);
 
             match run_validate(config) {
+                Ok(code) => code,
+                Err(e) => {
+                    error!("{e:#}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Command::ListRepos {
+            config,
+            policy,
+            verbose,
+            quiet,
+        } => {
+            init_tracing(verbose, quiet);
+            match run_list_repos(config, policy) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -352,6 +386,106 @@ fn run_apply(
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+fn run_list_repos(config_paths: Vec<PathBuf>, policy_filter: Option<String>) -> Result<ExitCode> {
+    let sources = paths_to_sources(&config_paths);
+    let mut config = load_config(&sources).context("failed to load config")?;
+
+    if let Some(name) = &policy_filter {
+        config.policies.retain(|p| &p.name == name);
+        if config.policies.is_empty() {
+            bail!("no policy named '{name}'");
+        }
+    }
+
+    let provider = registry::create_provider(&config.provider)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let all_repos = rt.block_on(provider.list_repos(&config.provider.org))?;
+
+    use std::collections::BTreeMap;
+    let mut matches: BTreeMap<String, (String, bool, Vec<String>)> = BTreeMap::new();
+    for repo in &all_repos {
+        matches.insert(
+            repo.full_name.clone(),
+            (
+                format!("{:?}", repo.visibility).to_lowercase(),
+                repo.archived,
+                Vec::new(),
+            ),
+        );
+    }
+
+    for policy in &config.policies {
+        let targeted =
+            rt.block_on(filter_repos(&all_repos, &policy.targets, provider.as_ref()))?;
+        for repo in targeted {
+            if let Some(entry) = matches.get_mut(&repo.full_name) {
+                entry.2.push(policy.name.clone());
+            }
+        }
+    }
+
+    let rows: Vec<(String, String, String, String)> = matches
+        .into_iter()
+        .filter(|(_, (_, _, policies))| !policies.is_empty())
+        .map(|(name, (vis, archived, policies))| {
+            (
+                name,
+                vis,
+                if archived { "yes".to_string() } else { "no".to_string() },
+                policies.join(", "),
+            )
+        })
+        .collect();
+
+    if rows.is_empty() {
+        println!("(no repositories matched any policy)");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let w_repo = rows.iter().map(|r| r.0.len()).max().unwrap_or(0).max(10);
+    let w_vis = rows.iter().map(|r| r.1.len()).max().unwrap_or(0).max(10);
+    let w_arch = rows.iter().map(|r| r.2.len()).max().unwrap_or(0).max(8);
+    let w_pol = rows.iter().map(|r| r.3.len()).max().unwrap_or(0).max(8);
+
+    println!(
+        "{:<w_repo$}  {:<w_vis$}  {:<w_arch$}  {:<w_pol$}",
+        "REPOSITORY",
+        "VISIBILITY",
+        "ARCHIVED",
+        "POLICIES",
+        w_repo = w_repo,
+        w_vis = w_vis,
+        w_arch = w_arch,
+        w_pol = w_pol,
+    );
+    println!(
+        "{:<w_repo$}  {:<w_vis$}  {:<w_arch$}  {:<w_pol$}",
+        "-".repeat(w_repo),
+        "-".repeat(w_vis),
+        "-".repeat(w_arch),
+        "-".repeat(w_pol),
+        w_repo = w_repo,
+        w_vis = w_vis,
+        w_arch = w_arch,
+        w_pol = w_pol,
+    );
+    for (name, vis, arch, pol) in rows {
+        println!(
+            "{:<w_repo$}  {:<w_vis$}  {:<w_arch$}  {:<w_pol$}",
+            name,
+            vis,
+            arch,
+            pol,
+            w_repo = w_repo,
+            w_vis = w_vis,
+            w_arch = w_arch,
+            w_pol = w_pol,
+        );
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_validate(config_paths: Vec<PathBuf>) -> Result<ExitCode> {

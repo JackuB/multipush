@@ -29,7 +29,7 @@ where
     for policy in &config.policies {
         let _policy_span = info_span!("policy", name = %policy.name).entered();
         let rules = rules_factory(policy)?;
-        let targeted = filter_repos(&all_repos, &policy.targets)?;
+        let targeted = filter_repos(&all_repos, &policy.targets, provider).await?;
         info!(
             policy = %policy.name,
             targeted = targeted.len(),
