@@ -1,0 +1,11 @@
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - recipe: codeowners
+    params:
+      default_owner: "@platform-team"
+    targets:
+      repos: "test-org/*"

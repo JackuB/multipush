@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// A repository on the hosting platform.
 #[derive(Debug, Clone)]
 pub struct Repo {
     pub owner: String,
@@ -17,6 +18,7 @@ pub struct Repo {
     pub custom_properties: HashMap<String, String>,
 }
 
+/// Repository visibility level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
@@ -25,6 +27,7 @@ pub enum Visibility {
     Internal,
 }
 
+/// The contents and metadata of a single file retrieved from a repository.
 #[derive(Debug, Clone)]
 pub struct FileContent {
     pub path: String,
@@ -32,6 +35,7 @@ pub struct FileContent {
     pub sha: String,
 }
 
+/// A pull request on the hosting platform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
     pub number: u64,
@@ -41,6 +45,7 @@ pub struct PullRequest {
     pub state: PrState,
 }
 
+/// Pull request lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrState {
@@ -49,13 +54,16 @@ pub enum PrState {
     Merged,
 }
 
+/// A file create/update/delete operation for a remediation PR.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChange {
     pub path: String,
+    /// File content. `None` means delete.
     pub content: Option<String>,
     pub message: String,
 }
 
+/// Policy violation severity level.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -110,6 +118,7 @@ impl FromStr for Severity {
     }
 }
 
+/// Repository-level settings (merge strategies, enabled features, etc.).
 #[derive(Debug, Clone)]
 pub struct RepoSettings {
     pub has_issues: bool,

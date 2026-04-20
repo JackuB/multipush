@@ -18,5 +18,8 @@ strsim = { workspace = true }
 home = { workspace = true }
 indexmap = { workspace = true }
 
+[features]
+test-helpers = []
+
 [dev-dependencies]
 tokio = { workspace = true }

@@ -1,0 +1,8 @@
+policies:
+  - name: require-license
+    severity: warning
+    targets:
+      repos: "test-org/*"
+    rules:
+      - !ensure_file
+        path: LICENSE

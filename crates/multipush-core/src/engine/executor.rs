@@ -9,6 +9,7 @@ use crate::provider::Provider;
 use crate::rule::Remediation;
 use crate::Result;
 
+/// Result of the apply phase: the original check report plus all PR actions taken.
 #[derive(Debug)]
 pub struct ApplyReport {
     pub report: Report,
@@ -16,9 +17,11 @@ pub struct ApplyReport {
     pub prs_updated: Vec<PrAction>,
     pub prs_skipped: Vec<PrAction>,
     pub prs_errored: Vec<PrAction>,
+    /// Number of PRs not created because the `max_prs` limit was reached.
     pub prs_limited: usize,
 }
 
+/// A single PR-related action taken (or skipped) during apply.
 #[derive(Debug)]
 pub struct PrAction {
     pub repo_name: String,
@@ -29,6 +32,7 @@ pub struct PrAction {
     pub error: Option<String>,
 }
 
+/// What happened to a remediation PR for a given repo + policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrActionKind {
     Created,
@@ -38,6 +42,7 @@ pub enum PrActionKind {
     Error,
 }
 
+/// Execute the apply phase: open or update PRs for failing repositories.
 pub async fn execute(
     report: &Report,
     config: &RootConfig,
@@ -342,160 +347,14 @@ fn generate_pr_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formatter::{PolicyReport, RepoResult, Summary};
-    use crate::model::{FileContent, PullRequest, PrState, RepoSettings, Severity};
+    use crate::model::{FileContent, PrState, RepoSettings, Severity};
+    use crate::testing::{default_config, make_report_with_failures, MockProvider};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
-
-    struct MockProvider {
-        repos: Vec<Repo>,
-        open_prs: Mutex<HashMap<String, PullRequest>>,
-        create_pr_calls: AtomicUsize,
-        update_pr_calls: AtomicUsize,
-    }
-
-    impl MockProvider {
-        fn new() -> Self {
-            Self {
-                repos: vec![],
-                open_prs: Mutex::new(HashMap::new()),
-                create_pr_calls: AtomicUsize::new(0),
-                update_pr_calls: AtomicUsize::new(0),
-            }
-        }
-
-        fn with_open_pr(self, repo_branch_key: &str, pr: PullRequest) -> Self {
-            self.open_prs
-                .lock()
-                .unwrap()
-                .insert(repo_branch_key.to_string(), pr);
-            self
-        }
-    }
-
-    #[async_trait]
-    impl Provider for MockProvider {
-        fn name(&self) -> &str {
-            "mock"
-        }
-
-        async fn list_repos(&self, _org: &str) -> Result<Vec<Repo>> {
-            Ok(self.repos.clone())
-        }
-
-        async fn get_file(
-            &self,
-            _repo: &Repo,
-            _path: &str,
-            _git_ref: &str,
-        ) -> Result<Option<FileContent>> {
-            Ok(None)
-        }
-
-        async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> {
-            unimplemented!()
-        }
-
-        async fn find_open_pr(
-            &self,
-            repo: &Repo,
-            head: &str,
-        ) -> Result<Option<PullRequest>> {
-            let key = format!("{}:{}", repo.full_name, head);
-            Ok(self.open_prs.lock().unwrap().get(&key).cloned())
-        }
-
-        async fn create_pr(
-            &self,
-            repo: &Repo,
-            branch: &str,
-            _base: &str,
-            title: &str,
-            _body: &str,
-            _changes: Vec<FileChange>,
-        ) -> Result<PullRequest> {
-            let n = self.create_pr_calls.fetch_add(1, Ordering::SeqCst) as u64 + 1;
-            Ok(PullRequest {
-                number: n,
-                title: title.to_string(),
-                head_branch: branch.to_string(),
-                url: format!("https://github.com/{}/pull/{n}", repo.full_name),
-                state: PrState::Open,
-            })
-        }
-
-        async fn update_pr(
-            &self,
-            _repo: &Repo,
-            pr: &PullRequest,
-            _changes: Vec<FileChange>,
-        ) -> Result<PullRequest> {
-            self.update_pr_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(pr.clone())
-        }
-    }
-
-    fn make_report_with_failures(repo_names: &[&str], with_remediations: bool) -> Report {
-        let remediations = if with_remediations {
-            vec![Remediation {
-                description: "Create LICENSE file".to_string(),
-                changes: vec![FileChange {
-                    path: "LICENSE".to_string(),
-                    content: Some("MIT License".to_string()),
-                    message: "Add LICENSE".to_string(),
-                }],
-            }]
-        } else {
-            vec![]
-        };
-
-        let repo_results = repo_names
-            .iter()
-            .map(|name| RepoResult {
-                repo_name: name.to_string(),
-                default_branch: "main".to_string(),
-                outcome: RepoOutcome::Fail {
-                    detail: "Missing LICENSE".to_string(),
-                    remediations: remediations.clone(),
-                },
-            })
-            .collect();
-
-        Report {
-            results: vec![PolicyReport {
-                policy_name: "require-license".to_string(),
-                description: Some("All repos must have LICENSE".to_string()),
-                severity: Severity::Error,
-                repo_results,
-            }],
-            summary: Summary {
-                total_repos: repo_names.len(),
-                passing: 0,
-                failing: repo_names.len(),
-                skipped: 0,
-                errors: 0,
-            },
-        }
-    }
-
-    fn default_config() -> RootConfig {
-        use crate::config::{ProviderConfig, ProviderType};
-        RootConfig {
-            provider: ProviderConfig {
-                provider_type: ProviderType::Github,
-                org: "org".to_string(),
-                token: "ghp_test".to_string(),
-                base_url: None,
-            },
-            defaults: None,
-            policies: vec![],
-        }
-    }
 
     #[tokio::test]
     async fn dry_run_records_actions_without_mutations() {
-        let provider = MockProvider::new();
+        let provider = MockProvider::new(vec![]);
         let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
         let config = default_config();
 
@@ -509,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn max_prs_limits_creation() {
-        let provider = MockProvider::new();
+        let provider = MockProvider::new(vec![]);
         let report = make_report_with_failures(
             &["org/a", "org/b", "org/c", "org/d", "org/e"],
             true,
@@ -535,7 +394,7 @@ mod tests {
             state: PrState::Open,
         };
 
-        let provider = MockProvider::new()
+        let provider = MockProvider::new(vec![])
             .with_open_pr("org/alpha:multipush/require-license", existing_pr);
 
         let report = make_report_with_failures(&["org/alpha"], true);
@@ -577,7 +436,7 @@ mod tests {
             state: PrState::Open,
         };
 
-        let provider = MockProvider::new()
+        let provider = MockProvider::new(vec![])
             .with_open_pr("org/alpha:multipush/require-license", existing_pr);
 
         let report = make_report_with_failures(&["org/alpha"], true);
@@ -592,7 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_remediation_skipped() {
-        let provider = MockProvider::new();
+        let provider = MockProvider::new(vec![]);
         let report = make_report_with_failures(&["org/alpha"], false);
         let config = default_config();
 

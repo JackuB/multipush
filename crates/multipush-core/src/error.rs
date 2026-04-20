@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+/// Errors that can occur in multipush-core.
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("config error: {0}")]

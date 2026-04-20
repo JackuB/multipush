@@ -744,6 +744,19 @@ mod tests {
         GitHubProvider::new(&config).unwrap()
     }
 
+    async fn mount_rate_limit(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/rate_limit"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "resources": {
+                    "core": { "limit": 5000, "remaining": 4999, "reset": 0, "used": 1 }
+                },
+                "rate": { "limit": 5000, "remaining": 4999, "reset": 0, "used": 1 }
+            })))
+            .mount(server)
+            .await;
+    }
+
     fn test_repo() -> Repo {
         Repo {
             name: "test-repo".to_string(),
@@ -906,6 +919,8 @@ mod tests {
         let provider = provider_with_mock(&server).await;
         let repo = test_repo();
 
+        mount_rate_limit(&server).await;
+
         // GET ref (base branch)
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/git/ref/heads/main"))
@@ -965,6 +980,8 @@ mod tests {
         let server = MockServer::start().await;
         let provider = provider_with_mock(&server).await;
         let repo = test_repo();
+
+        mount_rate_limit(&server).await;
 
         // GET ref (base branch)
         Mock::given(method("GET"))
@@ -1084,6 +1101,8 @@ mod tests {
         let provider = provider_with_mock(&server).await;
         let repo = test_repo();
 
+        mount_rate_limit(&server).await;
+
         // GET ref (base branch)
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/git/ref/heads/main"))
@@ -1146,6 +1165,8 @@ mod tests {
         let provider = provider_with_mock(&server).await;
         let repo = test_repo();
 
+        mount_rate_limit(&server).await;
+
         // GET ref (base branch)
         Mock::given(method("GET"))
             .and(path("/repos/test-org/test-repo/git/ref/heads/main"))
@@ -1205,6 +1226,8 @@ mod tests {
         let server = MockServer::start().await;
         let provider = provider_with_mock(&server).await;
         let repo = test_repo();
+
+        mount_rate_limit(&server).await;
 
         let existing_pr = PullRequest {
             number: 50,

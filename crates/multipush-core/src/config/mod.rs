@@ -15,6 +15,7 @@ pub use rules::{
 
 use serde::Deserialize;
 
+/// Top-level configuration: provider credentials, defaults, and policies.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RootConfig {

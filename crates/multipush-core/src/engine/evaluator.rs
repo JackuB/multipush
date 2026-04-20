@@ -10,6 +10,7 @@ use crate::Result;
 
 use super::targeting::filter_repos;
 
+/// Evaluate all policies against their targeted repositories and return a [`Report`].
 pub async fn evaluate<F>(
     config: &RootConfig,
     provider: &dyn Provider,
@@ -159,121 +160,11 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
 mod tests {
     use super::*;
     use crate::config::{
-        EnsureFileConfig, EnsureFileMode, ProviderConfig, ProviderType, RuleDefinition,
+        EnsureFileConfig, EnsureFileMode, RuleDefinition,
         TargetConfig,
     };
-    use crate::model::{FileChange, FileContent, PullRequest, Repo, RepoSettings, Visibility};
+    use crate::testing::{make_repo, test_config, MockProvider};
     use async_trait::async_trait;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-
-    struct MockProvider {
-        repos: Vec<Repo>,
-        files: Mutex<HashMap<String, FileContent>>,
-    }
-
-    impl MockProvider {
-        fn new(repos: Vec<Repo>) -> Self {
-            Self {
-                repos,
-                files: Mutex::new(HashMap::new()),
-            }
-        }
-
-        fn with_file(self, repo_file_key: &str, content: &str) -> Self {
-            self.files.lock().unwrap().insert(
-                repo_file_key.to_string(),
-                FileContent {
-                    path: repo_file_key.to_string(),
-                    content: content.to_string(),
-                    sha: "abc".to_string(),
-                },
-            );
-            self
-        }
-    }
-
-    #[async_trait]
-    impl Provider for MockProvider {
-        fn name(&self) -> &str {
-            "mock"
-        }
-
-        async fn list_repos(&self, _org: &str) -> Result<Vec<Repo>> {
-            Ok(self.repos.clone())
-        }
-
-        async fn get_file(
-            &self,
-            repo: &Repo,
-            path: &str,
-            _git_ref: &str,
-        ) -> Result<Option<FileContent>> {
-            let key = format!("{}:{}", repo.full_name, path);
-            Ok(self.files.lock().unwrap().get(&key).cloned())
-        }
-
-        async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> {
-            unimplemented!()
-        }
-
-        async fn find_open_pr(
-            &self,
-            _repo: &Repo,
-            _head: &str,
-        ) -> Result<Option<PullRequest>> {
-            unimplemented!()
-        }
-
-        async fn create_pr(
-            &self,
-            _repo: &Repo,
-            _branch: &str,
-            _base: &str,
-            _title: &str,
-            _body: &str,
-            _changes: Vec<FileChange>,
-        ) -> Result<PullRequest> {
-            unimplemented!()
-        }
-
-        async fn update_pr(
-            &self,
-            _repo: &Repo,
-            _pr: &PullRequest,
-            _changes: Vec<FileChange>,
-        ) -> Result<PullRequest> {
-            unimplemented!()
-        }
-    }
-
-    fn make_repo(full_name: &str) -> Repo {
-        let parts: Vec<&str> = full_name.splitn(2, '/').collect();
-        Repo {
-            owner: parts[0].to_string(),
-            name: parts.get(1).unwrap_or(&"").to_string(),
-            full_name: full_name.to_string(),
-            default_branch: "main".to_string(),
-            archived: false,
-            visibility: Visibility::Private,
-            topics: vec![],
-            language: None,
-            custom_properties: HashMap::new(),
-        }
-    }
-
-    fn test_config(policies: Vec<PolicyConfig>) -> RootConfig {
-        RootConfig {
-            provider: ProviderConfig {
-                provider_type: ProviderType::Github,
-                org: "org".to_string(),
-                token: "ghp_test".to_string(),
-                base_url: None,
-            },
-            defaults: None,
-            policies,
-        }
-    }
 
     fn simple_factory(policy: &PolicyConfig) -> Result<Vec<Box<dyn Rule>>> {
         let mut rules: Vec<Box<dyn Rule>> = Vec::new();

@@ -1,0 +1,6 @@
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies: []

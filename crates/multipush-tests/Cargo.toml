@@ -1,0 +1,11 @@
+[package]
+name = "multipush-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dev-dependencies]
+multipush-core = { workspace = true, features = ["test-helpers"] }
+multipush-rules = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }

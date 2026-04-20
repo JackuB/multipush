@@ -7,12 +7,14 @@ use crate::model::Severity;
 use crate::rule::Remediation;
 use crate::Result;
 
+/// Top-level check report containing per-policy results and an aggregate summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
     pub results: Vec<PolicyReport>,
     pub summary: Summary,
 }
 
+/// Results of evaluating a single policy across all targeted repositories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyReport {
     pub policy_name: String,
@@ -21,6 +23,7 @@ pub struct PolicyReport {
     pub repo_results: Vec<RepoResult>,
 }
 
+/// The evaluation result for one repository under one policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoResult {
     pub repo_name: String,
@@ -28,6 +31,7 @@ pub struct RepoResult {
     pub outcome: RepoOutcome,
 }
 
+/// Aggregated outcome for a repository: pass, fail, skip, or error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RepoOutcome {
@@ -47,6 +51,7 @@ pub enum RepoOutcome {
     },
 }
 
+/// Aggregate counts across all repositories in a report.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Summary {
     pub total_repos: usize,
@@ -118,9 +123,12 @@ pub fn format_pr_summary(report: &ApplyReport) -> String {
     }
 }
 
+/// Renders a [`Report`] or [`ApplyReport`] into a human-readable string.
 pub trait Formatter: Send + Sync {
+    /// Formatter identifier (e.g. `"table"`, `"json"`, `"markdown"`).
     fn name(&self) -> &str;
 
+    /// Format a check-mode report.
     fn format(&self, report: &Report) -> Result<String>;
 
     /// Format an apply report. Default implementation delegates to `format()` with a PR summary.

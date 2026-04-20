@@ -1,0 +1,13 @@
+provider:
+  type: github
+  org: test-org
+  token: ghp_test
+
+policies:
+  - name: require-readme
+    severity: error
+    targets:
+      repos: "test-org/*"
+    rules:
+      - !ensure_file
+        path: README.md

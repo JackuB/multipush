@@ -5,6 +5,7 @@ members = [
     "crates/multipush-rules",
     "crates/multipush-formatters",
     "crates/multipush-cli",
+    "crates/multipush-tests",
 ]
 resolver = "2"
 
@@ -48,6 +49,7 @@ base64 = "0.22"
 
 # Testing
 wiremock = "0.6"
+tempfile = "3"
 
 # Output formatting
 tabled = "0.17"
