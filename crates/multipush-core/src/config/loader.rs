@@ -494,9 +494,7 @@ fn validate_rule(
             }
             if let Some(ref b) = cfg.branch {
                 if b.is_empty() {
-                    errors.push(format!(
-                        "{ctx}: branch_protection.branch must not be empty"
-                    ));
+                    errors.push(format!("{ctx}: branch_protection.branch must not be empty"));
                 }
             }
         }

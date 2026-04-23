@@ -1532,10 +1532,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let result = provider
-            .get_branch_protection(&repo, "main")
-            .await
-            .unwrap();
+        let result = provider.get_branch_protection(&repo, "main").await.unwrap();
         let prot = result.unwrap();
         let rsc = prot.required_status_checks.unwrap();
         assert!(rsc.strict);
@@ -1561,10 +1558,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let result = provider
-            .get_branch_protection(&repo, "main")
-            .await
-            .unwrap();
+        let result = provider.get_branch_protection(&repo, "main").await.unwrap();
         assert!(result.is_none());
     }
 

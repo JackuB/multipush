@@ -419,9 +419,8 @@ pub async fn execute(
         if patch.is_empty() {
             continue;
         }
-        let _span =
-            info_span!("apply_branch_protection", repo = %repo.full_name, branch = %branch)
-                .entered();
+        let _span = info_span!("apply_branch_protection", repo = %repo.full_name, branch = %branch)
+            .entered();
 
         if dry_run {
             let json = serde_json::to_string_pretty(&patch)

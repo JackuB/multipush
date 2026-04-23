@@ -62,7 +62,9 @@ async fn targeting_has_file() {
         "Dockerfile".to_string(),
     )])]);
 
-    let report = evaluate(&config, &provider, rules_factory, 4).await.unwrap();
+    let report = evaluate(&config, &provider, rules_factory, 4)
+        .await
+        .unwrap();
     assert_eq!(evaluated_repos(&report), vec!["org/has"]);
 }
 
@@ -81,7 +83,9 @@ async fn targeting_topic() {
         "security".to_string(),
     )])]);
 
-    let report = evaluate(&config, &provider, rules_factory, 4).await.unwrap();
+    let report = evaluate(&config, &provider, rules_factory, 4)
+        .await
+        .unwrap();
     assert_eq!(evaluated_repos(&report), vec!["org/tagged"]);
 }
 
@@ -99,7 +103,9 @@ async fn targeting_visibility() {
         Visibility::Public,
     )])]);
 
-    let report = evaluate(&config, &provider, rules_factory, 4).await.unwrap();
+    let report = evaluate(&config, &provider, rules_factory, 4)
+        .await
+        .unwrap();
     assert_eq!(evaluated_repos(&report), vec!["org/public"]);
 }
 
@@ -142,6 +148,8 @@ async fn targeting_combined_and_semantics() {
         FilterConfig::Visibility(Visibility::Public),
     ])]);
 
-    let report = evaluate(&config, &provider, rules_factory, 4).await.unwrap();
+    let report = evaluate(&config, &provider, rules_factory, 4)
+        .await
+        .unwrap();
     assert_eq!(evaluated_repos(&report), vec!["org/match"]);
 }

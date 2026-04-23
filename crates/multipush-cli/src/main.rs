@@ -417,8 +417,7 @@ fn run_list_repos(config_paths: Vec<PathBuf>, policy_filter: Option<String>) -> 
     }
 
     for policy in &config.policies {
-        let targeted =
-            rt.block_on(filter_repos(&all_repos, &policy.targets, provider.as_ref()))?;
+        let targeted = rt.block_on(filter_repos(&all_repos, &policy.targets, provider.as_ref()))?;
         for repo in targeted {
             if let Some(entry) = matches.get_mut(&repo.full_name) {
                 entry.2.push(policy.name.clone());
@@ -433,7 +432,11 @@ fn run_list_repos(config_paths: Vec<PathBuf>, policy_filter: Option<String>) -> 
             (
                 name,
                 vis,
-                if archived { "yes".to_string() } else { "no".to_string() },
+                if archived {
+                    "yes".to_string()
+                } else {
+                    "no".to_string()
+                },
                 policies.join(", "),
             )
         })

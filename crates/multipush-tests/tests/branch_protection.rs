@@ -72,8 +72,8 @@ async fn run_apply(report: &Report, provider: &MockProvider, dry_run: bool) -> A
 #[tokio::test]
 async fn branch_protection_check_pass() {
     let repo = make_repo("org/alpha");
-    let provider = MockProvider::new(vec![repo])
-        .with_branch_protection("org/alpha:main", protection(1, true));
+    let provider =
+        MockProvider::new(vec![repo]).with_branch_protection("org/alpha:main", protection(1, true));
 
     let report = run_check(vec![standard_policy()], &provider).await;
 

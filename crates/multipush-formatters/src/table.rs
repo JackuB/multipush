@@ -301,9 +301,7 @@ fn format_patch(patch: &multipush_core::model::RepoSettingsPatch) -> String {
     serde_json::to_string(patch).unwrap_or_else(|_| "<unserializable>".to_string())
 }
 
-fn format_branch_protection_patch(
-    patch: &multipush_core::model::BranchProtectionPatch,
-) -> String {
+fn format_branch_protection_patch(patch: &multipush_core::model::BranchProtectionPatch) -> String {
     serde_json::to_string(patch).unwrap_or_else(|_| "<unserializable>".to_string())
 }
 

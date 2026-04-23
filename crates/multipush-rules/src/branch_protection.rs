@@ -18,10 +18,7 @@ impl BranchProtectionRule {
         Self { config }
     }
 
-    fn diff(
-        &self,
-        actual: Option<&BranchProtection>,
-    ) -> (Vec<String>, BranchProtectionPatch) {
+    fn diff(&self, actual: Option<&BranchProtection>) -> (Vec<String>, BranchProtectionPatch) {
         let mut mismatches = Vec::new();
         let mut patch = BranchProtectionPatch::default();
 
@@ -104,9 +101,7 @@ fn to_required_status_checks(cfg: &RequiredStatusChecksConfig) -> RequiredStatus
     }
 }
 
-fn to_required_pr_reviews(
-    cfg: &RequiredPullRequestReviewsConfig,
-) -> RequiredPullRequestReviews {
+fn to_required_pr_reviews(cfg: &RequiredPullRequestReviewsConfig) -> RequiredPullRequestReviews {
     RequiredPullRequestReviews {
         required_approving_review_count: cfg.required_approving_review_count,
         dismiss_stale_reviews: cfg.dismiss_stale_reviews,
@@ -133,7 +128,10 @@ impl Rule for BranchProtectionRule {
 
         debug!(repo = %ctx.repo.full_name, branch = %branch, "evaluating branch_protection rule");
 
-        let actual = ctx.provider.get_branch_protection(ctx.repo, &branch).await?;
+        let actual = ctx
+            .provider
+            .get_branch_protection(ctx.repo, &branch)
+            .await?;
         let (mismatches, patch) = self.diff(actual.as_ref());
 
         if mismatches.is_empty() {
@@ -228,11 +226,7 @@ mod tests {
         let result = rule.evaluate(&ctx).await.unwrap();
         match result {
             RuleResult::Fail { remediation, .. } => match remediation.unwrap() {
-                Remediation::BranchProtection {
-                    branch,
-                    patch,
-                    ..
-                } => {
+                Remediation::BranchProtection { branch, patch, .. } => {
                     assert_eq!(branch, "main");
                     assert_eq!(patch.enforce_admins, Some(true));
                     // matching field should not be in patch
