@@ -4,7 +4,9 @@ use tracing::{debug, error, info, info_span, warn};
 
 use crate::config::{ExistingPrStrategy, RootConfig};
 use crate::formatter::{RepoOutcome, Report};
-use crate::model::{FileChange, PullRequest, Repo, RepoSettingsPatch, Visibility};
+use crate::model::{
+    BranchProtectionPatch, FileChange, PullRequest, Repo, RepoSettingsPatch, Visibility,
+};
 use crate::provider::Provider;
 use crate::rule::Remediation;
 use crate::Result;
@@ -21,6 +23,8 @@ pub struct ApplyReport {
     pub prs_limited: usize,
     pub settings_applied: Vec<SettingsAction>,
     pub settings_errored: Vec<SettingsAction>,
+    pub branch_protection_applied: Vec<BranchProtectionAction>,
+    pub branch_protection_errored: Vec<BranchProtectionAction>,
 }
 
 /// A single repo-settings update taken (or skipped) during apply.
@@ -29,6 +33,17 @@ pub struct SettingsAction {
     pub repo_name: String,
     pub policy_names: Vec<String>,
     pub patch: RepoSettingsPatch,
+    pub action: SettingsActionKind,
+    pub error: Option<String>,
+}
+
+/// A single branch-protection update taken (or skipped) during apply.
+#[derive(Debug)]
+pub struct BranchProtectionAction {
+    pub repo_name: String,
+    pub branch: String,
+    pub policy_names: Vec<String>,
+    pub patch: BranchProtectionPatch,
     pub action: SettingsActionKind,
     pub error: Option<String>,
 }
@@ -91,6 +106,12 @@ pub async fn execute(
     let mut settings_by_repo: HashMap<String, (Repo, RepoSettingsPatch, Vec<String>)> =
         HashMap::new();
 
+    // Aggregate branch_protection patches per (repo, branch).
+    let mut protection_by_target: HashMap<
+        (String, String),
+        (Repo, BranchProtectionPatch, Vec<String>),
+    > = HashMap::new();
+
     for policy_report in &report.results {
         let policy_name = &policy_report.policy_name;
 
@@ -102,19 +123,33 @@ pub async fn execute(
 
             let repo = build_repo(&repo_result.repo_name, &repo_result.default_branch);
 
-            // Collect repo_settings patches separately; they don't flow
-            // through the PR pipeline.
+            // Collect non-file patches separately; they don't flow through
+            // the PR pipeline.
             for rem in all_remediations {
-                if let Remediation::RepoSettings { patch, .. } = rem {
-                    let entry = settings_by_repo
-                        .entry(repo.full_name.clone())
-                        .or_insert_with(|| {
-                            (repo.clone(), RepoSettingsPatch::default(), Vec::new())
-                        });
-                    entry.1.merge(patch.clone());
-                    if !entry.2.contains(policy_name) {
-                        entry.2.push(policy_name.clone());
+                match rem {
+                    Remediation::RepoSettings { patch, .. } => {
+                        let entry = settings_by_repo
+                            .entry(repo.full_name.clone())
+                            .or_insert_with(|| {
+                                (repo.clone(), RepoSettingsPatch::default(), Vec::new())
+                            });
+                        entry.1.merge(patch.clone());
+                        if !entry.2.contains(policy_name) {
+                            entry.2.push(policy_name.clone());
+                        }
                     }
+                    Remediation::BranchProtection { branch, patch, .. } => {
+                        let entry = protection_by_target
+                            .entry((repo.full_name.clone(), branch.clone()))
+                            .or_insert_with(|| {
+                                (repo.clone(), BranchProtectionPatch::default(), Vec::new())
+                            });
+                        entry.1.merge(patch.clone());
+                        if !entry.2.contains(policy_name) {
+                            entry.2.push(policy_name.clone());
+                        }
+                    }
+                    Remediation::FileChanges { .. } => {}
                 }
             }
 
@@ -377,6 +412,70 @@ pub async fn execute(
         }
     }
 
+    // Apply merged branch-protection patches.
+    let mut branch_protection_applied = Vec::new();
+    let mut branch_protection_errored = Vec::new();
+    for ((_repo_full_name, branch), (repo, patch, policy_names)) in protection_by_target {
+        if patch.is_empty() {
+            continue;
+        }
+        let _span =
+            info_span!("apply_branch_protection", repo = %repo.full_name, branch = %branch)
+                .entered();
+
+        if dry_run {
+            let json = serde_json::to_string_pretty(&patch)
+                .unwrap_or_else(|_| "<unserializable>".to_string());
+            info!(
+                repo = %repo.full_name,
+                branch = %branch,
+                "[dry-run] would update branch protection: {json}"
+            );
+            branch_protection_applied.push(BranchProtectionAction {
+                repo_name: repo.full_name.clone(),
+                branch: branch.clone(),
+                policy_names,
+                patch,
+                action: SettingsActionKind::DryRun,
+                error: None,
+            });
+            continue;
+        }
+
+        match provider
+            .update_branch_protection(&repo, &branch, &patch)
+            .await
+        {
+            Ok(()) => {
+                info!(repo = %repo.full_name, branch = %branch, "updated branch protection");
+                branch_protection_applied.push(BranchProtectionAction {
+                    repo_name: repo.full_name.clone(),
+                    branch: branch.clone(),
+                    policy_names,
+                    patch,
+                    action: SettingsActionKind::Applied,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                error!(
+                    repo = %repo.full_name,
+                    branch = %branch,
+                    error = %e,
+                    "failed to update branch protection"
+                );
+                branch_protection_errored.push(BranchProtectionAction {
+                    repo_name: repo.full_name.clone(),
+                    branch: branch.clone(),
+                    policy_names,
+                    patch,
+                    action: SettingsActionKind::Error,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
     Ok(ApplyReport {
         report: report.clone(),
         prs_created,
@@ -386,6 +485,8 @@ pub async fn execute(
         prs_limited,
         settings_applied,
         settings_errored,
+        branch_protection_applied,
+        branch_protection_errored,
     })
 }
 
@@ -409,7 +510,7 @@ fn collect_changes(remediations: &[Remediation]) -> Vec<FileChange> {
         .iter()
         .flat_map(|r| match r {
             Remediation::FileChanges { changes, .. } => changes.clone(),
-            Remediation::RepoSettings { .. } => Vec::new(),
+            Remediation::RepoSettings { .. } | Remediation::BranchProtection { .. } => Vec::new(),
         })
         .collect()
 }
@@ -450,6 +551,9 @@ fn generate_pr_body(
                 }
             }
             Remediation::RepoSettings { description, .. } => {
+                body.push_str(&format!("- {description}\n"));
+            }
+            Remediation::BranchProtection { description, .. } => {
                 body.push_str(&format!("- {description}\n"));
             }
         }
@@ -653,6 +757,21 @@ mod tests {
                 &self,
                 _repo: &Repo,
                 _patch: &RepoSettingsPatch,
+            ) -> Result<()> {
+                unimplemented!()
+            }
+            async fn get_branch_protection(
+                &self,
+                _repo: &Repo,
+                _branch: &str,
+            ) -> Result<Option<crate::model::BranchProtection>> {
+                unimplemented!()
+            }
+            async fn update_branch_protection(
+                &self,
+                _repo: &Repo,
+                _branch: &str,
+                _patch: &crate::model::BranchProtectionPatch,
             ) -> Result<()> {
                 unimplemented!()
             }

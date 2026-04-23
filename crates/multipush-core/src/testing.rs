@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use crate::config::{PolicyConfig, ProviderConfig, ProviderType, RootConfig};
 use crate::formatter::{PolicyReport, RepoOutcome, RepoResult, Report, Summary};
 use crate::model::{
-    FileChange, FileContent, PrState, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Severity,
-    Visibility,
+    BranchProtection, BranchProtectionPatch, FileChange, FileContent, PrState, PullRequest, Repo,
+    RepoSettings, RepoSettingsPatch, Severity, Visibility,
 };
 use crate::provider::Provider;
 use crate::rule::Remediation;
@@ -20,10 +20,13 @@ pub struct MockProvider {
     pub files: Mutex<HashMap<String, FileContent>>,
     pub open_prs: Mutex<HashMap<String, PullRequest>>,
     pub repo_settings: Mutex<HashMap<String, RepoSettings>>,
+    pub branch_protection: Mutex<HashMap<String, BranchProtection>>,
     pub create_pr_calls: AtomicUsize,
     pub update_pr_calls: AtomicUsize,
     pub update_repo_settings_calls: AtomicUsize,
     pub update_repo_settings_history: Mutex<Vec<(String, RepoSettingsPatch)>>,
+    pub update_branch_protection_calls: AtomicUsize,
+    pub update_branch_protection_history: Mutex<Vec<(String, String, BranchProtectionPatch)>>,
 }
 
 impl MockProvider {
@@ -33,11 +36,27 @@ impl MockProvider {
             files: Mutex::new(HashMap::new()),
             open_prs: Mutex::new(HashMap::new()),
             repo_settings: Mutex::new(HashMap::new()),
+            branch_protection: Mutex::new(HashMap::new()),
             create_pr_calls: AtomicUsize::new(0),
             update_pr_calls: AtomicUsize::new(0),
             update_repo_settings_calls: AtomicUsize::new(0),
             update_repo_settings_history: Mutex::new(Vec::new()),
+            update_branch_protection_calls: AtomicUsize::new(0),
+            update_branch_protection_history: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Set the branch protection returned for a given `"owner/repo:branch"` key.
+    pub fn with_branch_protection(
+        self,
+        repo_branch_key: &str,
+        protection: BranchProtection,
+    ) -> Self {
+        self.branch_protection
+            .lock()
+            .unwrap()
+            .insert(repo_branch_key.to_string(), protection);
+        self
     }
 
     /// Set the repo settings returned by `get_repo_settings` for a repo's full name.
@@ -150,6 +169,31 @@ impl Provider for MockProvider {
             .lock()
             .unwrap()
             .push((repo.full_name.clone(), patch.clone()));
+        Ok(())
+    }
+
+    async fn get_branch_protection(
+        &self,
+        repo: &Repo,
+        branch: &str,
+    ) -> Result<Option<BranchProtection>> {
+        let key = format!("{}:{}", repo.full_name, branch);
+        Ok(self.branch_protection.lock().unwrap().get(&key).cloned())
+    }
+
+    async fn update_branch_protection(
+        &self,
+        repo: &Repo,
+        branch: &str,
+        patch: &BranchProtectionPatch,
+    ) -> Result<()> {
+        self.update_branch_protection_calls
+            .fetch_add(1, Ordering::SeqCst);
+        self.update_branch_protection_history.lock().unwrap().push((
+            repo.full_name.clone(),
+            branch.to_string(),
+            patch.clone(),
+        ));
         Ok(())
     }
 }

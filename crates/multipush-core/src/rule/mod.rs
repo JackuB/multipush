@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FileChange, Repo, RepoSettingsPatch};
+use crate::model::{BranchProtectionPatch, FileChange, Repo, RepoSettingsPatch};
 use crate::provider::Provider;
 use crate::Result;
 
@@ -34,6 +34,11 @@ pub enum Remediation {
         description: String,
         patch: RepoSettingsPatch,
     },
+    BranchProtection {
+        description: String,
+        branch: String,
+        patch: BranchProtectionPatch,
+    },
 }
 
 impl Remediation {
@@ -41,6 +46,7 @@ impl Remediation {
         match self {
             Self::FileChanges { description, .. } => description,
             Self::RepoSettings { description, .. } => description,
+            Self::BranchProtection { description, .. } => description,
         }
     }
 }

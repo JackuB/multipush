@@ -8,6 +8,7 @@ pub enum RuleDefinition {
     EnsureYamlKey(EnsureYamlKeyConfig),
     FileMatches(FileMatchesConfig),
     RepoSettings(RepoSettingsConfig),
+    BranchProtection(BranchProtectionConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,6 +62,46 @@ pub struct EnsureYamlKeyConfig {
 pub struct FileMatchesConfig {
     pub path: String,
     pub pattern: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequiredStatusChecksConfig {
+    #[serde(default)]
+    pub strict: bool,
+    #[serde(default)]
+    pub contexts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequiredPullRequestReviewsConfig {
+    #[serde(default)]
+    pub required_approving_review_count: u32,
+    #[serde(default)]
+    pub dismiss_stale_reviews: bool,
+    #[serde(default)]
+    pub require_code_owner_reviews: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BranchProtectionConfig {
+    /// Branch to apply protection to. If omitted, the repo's default branch is used.
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub required_status_checks: Option<RequiredStatusChecksConfig>,
+    #[serde(default)]
+    pub required_pull_request_reviews: Option<RequiredPullRequestReviewsConfig>,
+    #[serde(default)]
+    pub enforce_admins: Option<bool>,
+    #[serde(default)]
+    pub required_linear_history: Option<bool>,
+    #[serde(default)]
+    pub allow_force_pushes: Option<bool>,
+    #[serde(default)]
+    pub allow_deletions: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

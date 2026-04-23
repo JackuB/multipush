@@ -9,8 +9,9 @@ pub use loader::{load_config, ConfigSource};
 pub use policy::{FilterConfig, PolicyConfig, TargetConfig};
 pub use provider::{ProviderConfig, ProviderType};
 pub use rules::{
-    EnsureFileConfig, EnsureFileMode, EnsureJsonKeyConfig, EnsureYamlKeyConfig, FileMatchesConfig,
-    JsonKeyMode, RepoSettingsConfig, RuleDefinition,
+    BranchProtectionConfig, EnsureFileConfig, EnsureFileMode, EnsureJsonKeyConfig,
+    EnsureYamlKeyConfig, FileMatchesConfig, JsonKeyMode, RepoSettingsConfig,
+    RequiredPullRequestReviewsConfig, RequiredStatusChecksConfig, RuleDefinition,
 };
 
 use serde::Deserialize;

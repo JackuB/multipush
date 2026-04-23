@@ -198,6 +198,23 @@ mod tests {
         ) -> multipush_core::Result<()> {
             unimplemented!()
         }
+
+        async fn get_branch_protection(
+            &self,
+            _repo: &Repo,
+            _branch: &str,
+        ) -> multipush_core::Result<Option<multipush_core::model::BranchProtection>> {
+            unimplemented!()
+        }
+
+        async fn update_branch_protection(
+            &self,
+            _repo: &Repo,
+            _branch: &str,
+            _patch: &multipush_core::model::BranchProtectionPatch,
+        ) -> multipush_core::Result<()> {
+            unimplemented!()
+        }
     }
 
     fn test_repo() -> Repo {

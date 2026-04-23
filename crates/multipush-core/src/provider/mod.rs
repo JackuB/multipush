@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 
-use crate::model::{FileChange, FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch};
+use crate::model::{
+    BranchProtection, BranchProtectionPatch, FileChange, FileContent, PullRequest, Repo,
+    RepoSettings, RepoSettingsPatch,
+};
 use crate::Result;
 
 /// Backend for interacting with a Git hosting platform (e.g. GitHub).
@@ -48,4 +51,20 @@ pub trait Provider: Send + Sync {
 
     /// Apply a partial update to repository-level settings.
     async fn update_repo_settings(&self, repo: &Repo, patch: &RepoSettingsPatch) -> Result<()>;
+
+    /// Retrieve branch protection settings for a branch.
+    /// Returns `None` if the branch has no protection configured.
+    async fn get_branch_protection(
+        &self,
+        repo: &Repo,
+        branch: &str,
+    ) -> Result<Option<BranchProtection>>;
+
+    /// Apply a partial update to branch protection for a branch.
+    async fn update_branch_protection(
+        &self,
+        repo: &Repo,
+        branch: &str,
+        patch: &BranchProtectionPatch,
+    ) -> Result<()>;
 }

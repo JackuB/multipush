@@ -480,6 +480,26 @@ fn validate_rule(
                 }
             }
         }
+        RuleDefinition::BranchProtection(cfg) => {
+            let all_none = cfg.required_status_checks.is_none()
+                && cfg.required_pull_request_reviews.is_none()
+                && cfg.enforce_admins.is_none()
+                && cfg.required_linear_history.is_none()
+                && cfg.allow_force_pushes.is_none()
+                && cfg.allow_deletions.is_none();
+            if all_none {
+                errors.push(format!(
+                    "{ctx}: branch_protection rule must set at least one field"
+                ));
+            }
+            if let Some(ref b) = cfg.branch {
+                if b.is_empty() {
+                    errors.push(format!(
+                        "{ctx}: branch_protection.branch must not be empty"
+                    ));
+                }
+            }
+        }
     }
 }
 

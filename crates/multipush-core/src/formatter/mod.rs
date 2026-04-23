@@ -192,6 +192,43 @@ pub fn has_settings_actions(report: &ApplyReport) -> bool {
     !report.settings_applied.is_empty() || !report.settings_errored.is_empty()
 }
 
+/// Build the branch-protection summary line for apply reports.
+pub fn format_branch_protection_summary(report: &ApplyReport) -> String {
+    let applied = report
+        .branch_protection_applied
+        .iter()
+        .filter(|a| a.action == SettingsActionKind::Applied)
+        .count();
+    let would_apply = report
+        .branch_protection_applied
+        .iter()
+        .filter(|a| a.action == SettingsActionKind::DryRun)
+        .count();
+    let errored = report.branch_protection_errored.len();
+
+    let mut parts = Vec::new();
+    if applied > 0 {
+        parts.push(format!("{applied} applied"));
+    }
+    if would_apply > 0 {
+        parts.push(format!("{would_apply} would apply"));
+    }
+    if errored > 0 {
+        parts.push(format!("{errored} errored"));
+    }
+
+    if parts.is_empty() {
+        "0 actions".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// True if the apply report has any branch-protection actions.
+pub fn has_branch_protection_actions(report: &ApplyReport) -> bool {
+    !report.branch_protection_applied.is_empty() || !report.branch_protection_errored.is_empty()
+}
+
 /// Renders a [`Report`] or [`ApplyReport`] into a human-readable string.
 pub trait Formatter: Send + Sync {
     /// Formatter identifier (e.g. `"table"`, `"json"`, `"markdown"`).

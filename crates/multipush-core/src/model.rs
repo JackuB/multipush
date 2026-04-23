@@ -155,6 +155,87 @@ pub struct RepoSettingsPatch {
     pub default_branch: Option<String>,
 }
 
+/// Required status checks for a protected branch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequiredStatusChecks {
+    pub strict: bool,
+    #[serde(default)]
+    pub contexts: Vec<String>,
+}
+
+/// Required pull-request review settings for a protected branch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequiredPullRequestReviews {
+    #[serde(default)]
+    pub required_approving_review_count: u32,
+    #[serde(default)]
+    pub dismiss_stale_reviews: bool,
+    #[serde(default)]
+    pub require_code_owner_reviews: bool,
+}
+
+/// Branch protection settings for a single branch.
+#[derive(Debug, Clone, Default)]
+pub struct BranchProtection {
+    pub required_status_checks: Option<RequiredStatusChecks>,
+    pub required_pull_request_reviews: Option<RequiredPullRequestReviews>,
+    pub enforce_admins: bool,
+    pub required_linear_history: bool,
+    pub allow_force_pushes: bool,
+    pub allow_deletions: bool,
+}
+
+/// Partial update to branch protection. Only set fields are sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchProtectionPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_status_checks: Option<RequiredStatusChecks>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_pull_request_reviews: Option<RequiredPullRequestReviews>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_admins: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_linear_history: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_force_pushes: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_deletions: Option<bool>,
+}
+
+impl BranchProtectionPatch {
+    /// Merge `other` into `self`. Fields set in `other` override `self`.
+    pub fn merge(&mut self, other: BranchProtectionPatch) {
+        if other.required_status_checks.is_some() {
+            self.required_status_checks = other.required_status_checks;
+        }
+        if other.required_pull_request_reviews.is_some() {
+            self.required_pull_request_reviews = other.required_pull_request_reviews;
+        }
+        if other.enforce_admins.is_some() {
+            self.enforce_admins = other.enforce_admins;
+        }
+        if other.required_linear_history.is_some() {
+            self.required_linear_history = other.required_linear_history;
+        }
+        if other.allow_force_pushes.is_some() {
+            self.allow_force_pushes = other.allow_force_pushes;
+        }
+        if other.allow_deletions.is_some() {
+            self.allow_deletions = other.allow_deletions;
+        }
+    }
+
+    /// Returns true if no fields are set.
+    pub fn is_empty(&self) -> bool {
+        self.required_status_checks.is_none()
+            && self.required_pull_request_reviews.is_none()
+            && self.enforce_admins.is_none()
+            && self.required_linear_history.is_none()
+            && self.allow_force_pushes.is_none()
+            && self.allow_deletions.is_none()
+    }
+}
+
 impl RepoSettingsPatch {
     /// Merge `other` into `self`. Fields set in `other` override `self`.
     pub fn merge(&mut self, other: RepoSettingsPatch) {

@@ -1,9 +1,10 @@
 //! Built-in rule implementations for multipush.
 //!
 //! Provides `EnsureFile`, `EnsureJsonKey`, `EnsureYamlKey`, `FileMatches`,
-//! and `RepoSettings` rules that implement the `multipush_core::rule::Rule`
-//! trait.
+//! `RepoSettings`, and `BranchProtection` rules that implement the
+//! `multipush_core::rule::Rule` trait.
 
+mod branch_protection;
 mod ensure_file;
 mod ensure_json_key;
 mod ensure_yaml_key;
@@ -11,6 +12,7 @@ mod file_matches;
 mod key_path;
 mod repo_settings;
 
+pub use branch_protection::BranchProtectionRule;
 pub use ensure_file::EnsureFileRule;
 pub use ensure_json_key::EnsureJsonKeyRule;
 pub use ensure_yaml_key::EnsureYamlKeyRule;
@@ -31,5 +33,8 @@ pub fn create_rule(def: &RuleDefinition) -> multipush_core::Result<Box<dyn Rule>
         }
         RuleDefinition::FileMatches(config) => Ok(Box::new(FileMatchesRule::new(config.clone())?)),
         RuleDefinition::RepoSettings(config) => Ok(Box::new(RepoSettingsRule::new(config.clone()))),
+        RuleDefinition::BranchProtection(config) => {
+            Ok(Box::new(BranchProtectionRule::new(config.clone())))
+        }
     }
 }

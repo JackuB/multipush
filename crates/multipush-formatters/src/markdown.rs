@@ -2,8 +2,9 @@ use std::fmt::Write;
 
 use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
-    build_pr_action_map, format_pr_summary, format_settings_summary, has_settings_actions,
-    Formatter, PolicyReport, RepoOutcome, Report,
+    build_pr_action_map, format_branch_protection_summary, format_pr_summary,
+    format_settings_summary, has_branch_protection_actions, has_settings_actions, Formatter,
+    PolicyReport, RepoOutcome, Report,
 };
 
 pub struct MarkdownFormatter;
@@ -170,16 +171,53 @@ impl Formatter for MarkdownFormatter {
             out.push('\n');
         }
 
+        if has_branch_protection_actions(apply_report) {
+            writeln!(out, "## Branch protection updates\n").unwrap();
+            writeln!(out, "| Repository | Branch | Policies | Action | Patch |").unwrap();
+            writeln!(out, "|---|---|---|---|---|").unwrap();
+            for a in &apply_report.branch_protection_applied {
+                let label = match a.action {
+                    SettingsActionKind::Applied => "protection updated",
+                    SettingsActionKind::DryRun => "would update protection",
+                    SettingsActionKind::Error => "error",
+                };
+                writeln!(
+                    out,
+                    "| {} | {} | {} | {} | `{}` |",
+                    a.repo_name,
+                    a.branch,
+                    a.policy_names.join(", "),
+                    label,
+                    serde_json::to_string(&a.patch).unwrap_or_default(),
+                )
+                .unwrap();
+            }
+            for a in &apply_report.branch_protection_errored {
+                writeln!(
+                    out,
+                    "| {} | {} | {} | error: {} | `{}` |",
+                    a.repo_name,
+                    a.branch,
+                    a.policy_names.join(", "),
+                    a.error.as_deref().unwrap_or("unknown"),
+                    serde_json::to_string(&a.patch).unwrap_or_default(),
+                )
+                .unwrap();
+            }
+            out.push('\n');
+        }
+
         let s = &report.summary;
         write!(
             out,
-            "**Summary:** {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {}",
+            "**Summary:** {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {} | Branch protection: {}",
             s.passing,
             s.failing,
             s.skipped,
             s.errors,
             format_pr_summary(apply_report),
             format_settings_summary(apply_report),
+            format_branch_protection_summary(apply_report),
         )
         .unwrap();
 
@@ -267,6 +305,8 @@ mod tests {
             prs_limited: 0,
             settings_applied: vec![],
             settings_errored: vec![],
+            branch_protection_applied: vec![],
+            branch_protection_errored: vec![],
         };
 
         let formatter = MarkdownFormatter::new();

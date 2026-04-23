@@ -5,8 +5,9 @@ use tabled::{Table, Tabled};
 
 use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
-    build_pr_action_map, format_pr_summary, format_settings_summary, has_settings_actions,
-    Formatter, PolicyReport, RepoOutcome, Report,
+    build_pr_action_map, format_branch_protection_summary, format_pr_summary,
+    format_settings_summary, has_branch_protection_actions, has_settings_actions, Formatter,
+    PolicyReport, RepoOutcome, Report,
 };
 
 #[derive(Tabled)]
@@ -35,6 +36,20 @@ struct ApplyRow {
 struct SettingsRow {
     #[tabled(rename = "Repository")]
     repo: String,
+    #[tabled(rename = "Policies")]
+    policies: String,
+    #[tabled(rename = "Action")]
+    action: String,
+    #[tabled(rename = "Patch")]
+    patch: String,
+}
+
+#[derive(Tabled)]
+struct BranchProtectionRow {
+    #[tabled(rename = "Repository")]
+    repo: String,
+    #[tabled(rename = "Branch")]
+    branch: String,
     #[tabled(rename = "Policies")]
     policies: String,
     #[tabled(rename = "Action")]
@@ -229,16 +244,52 @@ impl Formatter for TableFormatter {
             writeln!(out, "{table}").unwrap();
         }
 
+        if has_branch_protection_actions(apply_report) {
+            out.push('\n');
+            writeln!(out, "Branch protection updates:").unwrap();
+            let mut rows: Vec<BranchProtectionRow> = Vec::new();
+            for a in &apply_report.branch_protection_applied {
+                let label = match a.action {
+                    SettingsActionKind::Applied => "protection updated",
+                    SettingsActionKind::DryRun => "would update protection",
+                    SettingsActionKind::Error => "error",
+                };
+                rows.push(BranchProtectionRow {
+                    repo: a.repo_name.clone(),
+                    branch: a.branch.clone(),
+                    policies: a.policy_names.join(", "),
+                    action: label.to_string(),
+                    patch: format_branch_protection_patch(&a.patch),
+                });
+            }
+            for a in &apply_report.branch_protection_errored {
+                rows.push(BranchProtectionRow {
+                    repo: a.repo_name.clone(),
+                    branch: a.branch.clone(),
+                    policies: a.policy_names.join(", "),
+                    action: a
+                        .error
+                        .clone()
+                        .map(|e| format!("error: {e}"))
+                        .unwrap_or_else(|| "error".to_string()),
+                    patch: format_branch_protection_patch(&a.patch),
+                });
+            }
+            let table = Table::new(rows).with(Style::sharp()).to_string();
+            writeln!(out, "{table}").unwrap();
+        }
+
         let s = &report.summary;
         write!(
             out,
-            "Summary: {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {}",
+            "Summary: {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {} | Branch protection: {}",
             s.passing,
             s.failing,
             s.skipped,
             s.errors,
             format_pr_summary(apply_report),
             format_settings_summary(apply_report),
+            format_branch_protection_summary(apply_report),
         )
         .unwrap();
 
@@ -247,6 +298,12 @@ impl Formatter for TableFormatter {
 }
 
 fn format_patch(patch: &multipush_core::model::RepoSettingsPatch) -> String {
+    serde_json::to_string(patch).unwrap_or_else(|_| "<unserializable>".to_string())
+}
+
+fn format_branch_protection_patch(
+    patch: &multipush_core::model::BranchProtectionPatch,
+) -> String {
     serde_json::to_string(patch).unwrap_or_else(|_| "<unserializable>".to_string())
 }
 
@@ -449,6 +506,8 @@ mod tests {
             prs_limited: 0,
             settings_applied: vec![],
             settings_errored: vec![],
+            branch_protection_applied: vec![],
+            branch_protection_errored: vec![],
         };
 
         let formatter = TableFormatter::with_color(false);

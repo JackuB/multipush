@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use multipush_core::config::ProviderConfig;
 use multipush_core::error::CoreError;
 use multipush_core::model::{
-    FileChange, FileContent, PrState, PullRequest, Repo, RepoSettings, RepoSettingsPatch,
-    Visibility,
+    BranchProtection, BranchProtectionPatch, FileChange, FileContent, PrState, PullRequest, Repo,
+    RepoSettings, RepoSettingsPatch, RequiredPullRequestReviews, RequiredStatusChecks, Visibility,
 };
 use multipush_core::provider::Provider;
 use octocrab::Octocrab;
@@ -607,6 +607,127 @@ impl Provider for GitHubProvider {
         .instrument(debug_span!("api", method = "update_repo_settings", repo = %repo.full_name))
         .await
     }
+
+    async fn get_branch_protection(
+        &self,
+        repo: &Repo,
+        branch: &str,
+    ) -> multipush_core::Result<Option<BranchProtection>> {
+        async {
+            let result: std::result::Result<serde_json::Value, octocrab::Error> = self
+                .client
+                .get(
+                    format!(
+                        "/repos/{}/{}/branches/{}/protection",
+                        repo.owner, repo.name, branch
+                    ),
+                    None::<&()>,
+                )
+                .await;
+
+            match result {
+                Ok(value) => Ok(Some(parse_branch_protection(&value))),
+                Err(octocrab::Error::GitHub { source, .. })
+                    if source.status_code.as_u16() == 404 =>
+                {
+                    Ok(None)
+                }
+                Err(e) => Err(CoreError::Provider(e.to_string())),
+            }
+        }
+        .instrument(debug_span!("api", method = "get_branch_protection", repo = %repo.full_name, branch = branch))
+        .await
+    }
+
+    async fn update_branch_protection(
+        &self,
+        repo: &Repo,
+        branch: &str,
+        patch: &BranchProtectionPatch,
+    ) -> multipush_core::Result<()> {
+        async {
+            self.check_rate_limit().await?;
+
+            let _: serde_json::Value = self
+                .client
+                .put(
+                    format!(
+                        "/repos/{}/{}/branches/{}/protection",
+                        repo.owner, repo.name, branch
+                    ),
+                    Some(patch),
+                )
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(())
+        }
+        .instrument(debug_span!("api", method = "update_branch_protection", repo = %repo.full_name, branch = branch))
+        .await
+    }
+}
+
+fn parse_branch_protection(value: &serde_json::Value) -> BranchProtection {
+    let required_status_checks = value.get("required_status_checks").and_then(|v| {
+        if v.is_null() {
+            return None;
+        }
+        Some(RequiredStatusChecks {
+            strict: v.get("strict").and_then(|s| s.as_bool()).unwrap_or(false),
+            contexts: v
+                .get("contexts")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+    });
+
+    let required_pull_request_reviews = value.get("required_pull_request_reviews").and_then(|v| {
+        if v.is_null() {
+            return None;
+        }
+        Some(RequiredPullRequestReviews {
+            required_approving_review_count: v
+                .get("required_approving_review_count")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0) as u32,
+            dismiss_stale_reviews: v
+                .get("dismiss_stale_reviews")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false),
+            require_code_owner_reviews: v
+                .get("require_code_owner_reviews")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false),
+        })
+    });
+
+    BranchProtection {
+        required_status_checks,
+        required_pull_request_reviews,
+        enforce_admins: extract_flag(value, "enforce_admins"),
+        required_linear_history: extract_flag(value, "required_linear_history"),
+        allow_force_pushes: extract_flag(value, "allow_force_pushes"),
+        allow_deletions: extract_flag(value, "allow_deletions"),
+    }
+}
+
+fn extract_flag(value: &serde_json::Value, key: &str) -> bool {
+    value
+        .get(key)
+        .and_then(|v| {
+            // GitHub returns these either as a bare bool or as `{ enabled: bool }`.
+            if let Some(b) = v.as_bool() {
+                Some(b)
+            } else {
+                v.get("enabled").and_then(|e| e.as_bool())
+            }
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1383,5 +1504,135 @@ mod tests {
         assert_eq!(result.number, 50);
         assert_eq!(result.title, "Existing PR");
         assert_eq!(result.head_branch, "multipush/fix");
+    }
+
+    #[tokio::test]
+    async fn get_branch_protection_found() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "required_status_checks": {
+                    "strict": true,
+                    "contexts": ["ci/build"]
+                },
+                "required_pull_request_reviews": {
+                    "required_approving_review_count": 2,
+                    "dismiss_stale_reviews": true,
+                    "require_code_owner_reviews": false
+                },
+                "enforce_admins": { "enabled": true },
+                "required_linear_history": { "enabled": false },
+                "allow_force_pushes": { "enabled": false },
+                "allow_deletions": { "enabled": false }
+            })))
+            .mount(&server)
+            .await;
+
+        let result = provider
+            .get_branch_protection(&repo, "main")
+            .await
+            .unwrap();
+        let prot = result.unwrap();
+        let rsc = prot.required_status_checks.unwrap();
+        assert!(rsc.strict);
+        assert_eq!(rsc.contexts, vec!["ci/build".to_string()]);
+        let rpr = prot.required_pull_request_reviews.unwrap();
+        assert_eq!(rpr.required_approving_review_count, 2);
+        assert!(rpr.dismiss_stale_reviews);
+        assert!(prot.enforce_admins);
+        assert!(!prot.required_linear_history);
+    }
+
+    #[tokio::test]
+    async fn get_branch_protection_none() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(github_error_json("Branch not protected")),
+            )
+            .mount(&server)
+            .await;
+
+        let result = provider
+            .get_branch_protection(&repo, "main")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_branch_protection_sends_put() {
+        use wiremock::matchers::body_json;
+
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        let patch = multipush_core::model::BranchProtectionPatch {
+            required_pull_request_reviews: Some(
+                multipush_core::model::RequiredPullRequestReviews {
+                    required_approving_review_count: 1,
+                    dismiss_stale_reviews: false,
+                    require_code_owner_reviews: false,
+                },
+            ),
+            enforce_admins: Some(true),
+            ..Default::default()
+        };
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .and(body_json(serde_json::json!({
+                "required_pull_request_reviews": {
+                    "required_approving_review_count": 1,
+                    "dismiss_stale_reviews": false,
+                    "require_code_owner_reviews": false
+                },
+                "enforce_admins": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        provider
+            .update_branch_protection(&repo, "main", &patch)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_branch_protection_api_error() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        let patch = multipush_core::model::BranchProtectionPatch {
+            enforce_admins: Some(true),
+            ..Default::default()
+        };
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(github_error_json("Forbidden")))
+            .mount(&server)
+            .await;
+
+        let result = provider
+            .update_branch_protection(&repo, "main", &patch)
+            .await;
+        assert!(result.is_err());
     }
 }

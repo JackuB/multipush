@@ -1,0 +1,32 @@
+# Branch-protection policy example
+#
+# Demonstrates the `branch_protection` rule, which configures GitHub branch
+# protection directly via the API (not via PRs). Only fields you list are
+# enforced; unspecified fields are left untouched.
+#
+# By default the rule targets each repo's default branch. Override with
+# `branch: <name>` on the rule if needed.
+#
+# Usage:
+#   export GITHUB_ORG=my-org
+#   export GITHUB_TOKEN=ghp_...
+#   multipush check -c examples/branch-protection.yml
+#   multipush apply --dry-run -c examples/branch-protection.yml
+#   multipush apply -c examples/branch-protection.yml
+
+provider:
+  type: github
+  org: ${GITHUB_ORG}
+  token: ${GITHUB_TOKEN}
+
+policies:
+  - name: require-default-branch-protection
+    description: Require at least one approving review and enforce for admins
+    severity: error
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !branch_protection
+        required_pull_request_reviews:
+          required_approving_review_count: 1
+        enforce_admins: true
