@@ -498,6 +498,11 @@ fn validate_rule(
                 }
             }
         }
+        RuleDefinition::FileAbsent(cfg) => {
+            if cfg.path.is_empty() {
+                errors.push(format!("{ctx}: file_absent.path must not be empty"));
+            }
+        }
     }
 }
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A repository on the hosting platform.
@@ -19,7 +20,7 @@ pub struct Repo {
 }
 
 /// Repository visibility level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     Public,
@@ -64,7 +65,7 @@ pub struct FileChange {
 }
 
 /// Policy violation severity level.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     Info,

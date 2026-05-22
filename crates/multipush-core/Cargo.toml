@@ -17,6 +17,7 @@ regex = { workspace = true }
 strsim = { workspace = true }
 home = { workspace = true }
 indexmap = { workspace = true }
+schemars = { workspace = true }
 
 [features]
 test-helpers = []

@@ -1,6 +1,7 @@
+use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     #[serde(rename = "type")]
@@ -10,7 +11,7 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
     Github,

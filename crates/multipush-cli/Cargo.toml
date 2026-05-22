@@ -14,6 +14,8 @@ multipush-provider-github = { workspace = true }
 multipush-rules = { workspace = true }
 multipush-formatters = { workspace = true }
 clap = { workspace = true }
+schemars = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

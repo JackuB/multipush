@@ -1,71 +1,54 @@
 use async_trait::async_trait;
-use regex::Regex;
 use tracing::debug;
 
-use multipush_core::config::FileMatchesConfig;
-use multipush_core::rule::{Rule, RuleContext, RuleResult};
+use multipush_core::config::FileAbsentConfig;
+use multipush_core::model::FileChange;
+use multipush_core::rule::{Remediation, Rule, RuleContext, RuleResult};
 
-pub struct FileMatchesRule {
-    config: FileMatchesConfig,
-    regex: Regex,
+pub struct FileAbsentRule {
+    config: FileAbsentConfig,
 }
 
-impl FileMatchesRule {
-    pub fn new(config: FileMatchesConfig) -> multipush_core::Result<Self> {
-        let regex = Regex::new(&config.pattern).map_err(|e| {
-            multipush_core::CoreError::Config(format!(
-                "Invalid regex pattern `{}`: {e}",
-                config.pattern
-            ))
-        })?;
-        Ok(Self { config, regex })
+impl FileAbsentRule {
+    pub fn new(config: FileAbsentConfig) -> Self {
+        Self { config }
     }
 }
 
 #[async_trait]
-impl Rule for FileMatchesRule {
+impl Rule for FileAbsentRule {
     fn rule_type(&self) -> &str {
-        "file_matches"
+        "file_absent"
     }
 
     fn description(&self) -> String {
-        format!(
-            "Ensure {} matches pattern `{}`",
-            self.config.path, self.config.pattern
-        )
+        format!("Ensure file {} does not exist", self.config.path)
     }
 
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> multipush_core::Result<RuleResult> {
         let path = &self.config.path;
-        debug!(path = path.as_str(), pattern = self.config.pattern.as_str(), repo = %ctx.repo.full_name, "evaluating file_matches rule");
+        debug!(path = path.as_str(), repo = %ctx.repo.full_name, "evaluating file_absent rule");
 
         let file = ctx
             .provider
             .get_file(ctx.repo, path, &ctx.repo.default_branch)
             .await?;
 
-        let file = match file {
-            Some(f) => f,
-            None => {
-                return Ok(RuleResult::Fail {
-                    detail: format!("File {path} does not exist"),
-                    remediation: None,
-                });
-            }
-        };
-
-        if self.regex.is_match(&file.content) {
-            Ok(RuleResult::Pass {
-                detail: format!("File {path} matches pattern `{}`", self.config.pattern),
-            })
-        } else {
-            Ok(RuleResult::Fail {
-                detail: format!(
-                    "File {path} does not match pattern `{}`",
-                    self.config.pattern
-                ),
-                remediation: None,
-            })
+        match file {
+            None => Ok(RuleResult::Pass {
+                detail: format!("File {path} does not exist"),
+            }),
+            Some(_) => Ok(RuleResult::Fail {
+                detail: format!("File {path} exists but should be absent"),
+                remediation: Some(Remediation::FileChanges {
+                    description: format!("Delete file {path}"),
+                    changes: vec![FileChange {
+                        path: path.clone(),
+                        content: None,
+                        message: format!("Delete file {path}"),
+                    }],
+                }),
+            }),
         }
     }
 }
@@ -74,7 +57,7 @@ impl Rule for FileMatchesRule {
 mod tests {
     use super::*;
     use multipush_core::model::{
-        FileChange, FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Visibility,
+        FileContent, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Visibility,
     };
     use multipush_core::provider::Provider;
     use std::collections::HashMap;
@@ -205,92 +188,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_missing() {
-        let rule = FileMatchesRule::new(FileMatchesConfig {
-            path: "README.md".to_string(),
-            pattern: "MIT".to_string(),
-        })
-        .unwrap();
-
+    async fn file_absent_passes_when_missing() {
         let provider = TestProvider::new();
         let repo = test_repo();
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Fail { .. }));
-    }
-
-    #[tokio::test]
-    async fn pattern_matches() {
-        let rule = FileMatchesRule::new(FileMatchesConfig {
-            path: "LICENSE".to_string(),
-            pattern: r"MIT\s+License".to_string(),
-        })
-        .unwrap();
-
-        let provider = TestProvider::new().with_file("LICENSE", "MIT License\nCopyright 2024");
-        let repo = test_repo();
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Pass { .. }));
-    }
-
-    #[tokio::test]
-    async fn pattern_no_match() {
-        let rule = FileMatchesRule::new(FileMatchesConfig {
-            path: "LICENSE".to_string(),
-            pattern: r"Apache".to_string(),
-        })
-        .unwrap();
-
-        let provider = TestProvider::new().with_file("LICENSE", "MIT License");
-        let repo = test_repo();
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(
-            result,
-            RuleResult::Fail {
-                remediation: None,
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn multiline_match() {
-        let rule = FileMatchesRule::new(FileMatchesConfig {
-            path: "Cargo.toml".to_string(),
-            pattern: r"(?s)edition.*2021".to_string(),
-        })
-        .unwrap();
-
-        let provider = TestProvider::new().with_file(
-            "Cargo.toml",
-            "[package]\nname = \"foo\"\nedition = \"2021\"\n",
-        );
-        let repo = test_repo();
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
-        assert!(matches!(result, RuleResult::Pass { .. }));
-    }
-
-    #[test]
-    fn invalid_regex() {
-        let result = FileMatchesRule::new(FileMatchesConfig {
-            path: "file.txt".to_string(),
-            pattern: r"[invalid".to_string(),
+        let rule = FileAbsentRule::new(FileAbsentConfig {
+            path: ".env".to_string(),
         });
-        assert!(result.is_err());
+
+        let ctx = RuleContext {
+            provider: &provider,
+            repo: &repo,
+        };
+        let result = rule.evaluate(&ctx).await.unwrap();
+
+        match result {
+            RuleResult::Pass { detail } => {
+                assert!(detail.contains("does not exist"));
+            }
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn file_absent_fails_when_present() {
+        let provider = TestProvider::new().with_file(".env", "SECRET=abc");
+        let repo = test_repo();
+        let rule = FileAbsentRule::new(FileAbsentConfig {
+            path: ".env".to_string(),
+        });
+
+        let ctx = RuleContext {
+            provider: &provider,
+            repo: &repo,
+        };
+        let result = rule.evaluate(&ctx).await.unwrap();
+
+        match result {
+            RuleResult::Fail {
+                detail,
+                remediation,
+            } => {
+                assert!(detail.contains("exists but should be absent"));
+                let rem = remediation.unwrap();
+                match rem {
+                    Remediation::FileChanges {
+                        changes,
+                        description,
+                    } => {
+                        assert!(description.contains("Delete"));
+                        assert_eq!(changes.len(), 1);
+                        assert_eq!(changes[0].path, ".env");
+                        assert!(changes[0].content.is_none());
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
     }
 }

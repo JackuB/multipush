@@ -10,14 +10,15 @@ pub use policy::{FilterConfig, PolicyConfig, TargetConfig};
 pub use provider::{ProviderConfig, ProviderType};
 pub use rules::{
     BranchProtectionConfig, EnsureFileConfig, EnsureFileMode, EnsureJsonKeyConfig,
-    EnsureYamlKeyConfig, FileMatchesConfig, JsonKeyMode, RepoSettingsConfig,
+    EnsureYamlKeyConfig, FileAbsentConfig, FileMatchesConfig, JsonKeyMode, RepoSettingsConfig,
     RequiredPullRequestReviewsConfig, RequiredStatusChecksConfig, RuleDefinition,
 };
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 /// Top-level configuration: provider credentials, defaults, and policies.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RootConfig {
     pub provider: ProviderConfig,

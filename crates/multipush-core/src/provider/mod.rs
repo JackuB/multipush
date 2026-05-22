@@ -4,6 +4,7 @@ use crate::model::{
     BranchProtection, BranchProtectionPatch, FileChange, FileContent, PullRequest, Repo,
     RepoSettings, RepoSettingsPatch,
 };
+
 use crate::Result;
 
 /// Backend for interacting with a Git hosting platform (e.g. GitHub).
@@ -59,6 +60,9 @@ pub trait Provider: Send + Sync {
         repo: &Repo,
         branch: &str,
     ) -> Result<Option<BranchProtection>>;
+
+    /// Enable auto-merge on a pull request (e.g. via GitHub GraphQL).
+    async fn enable_auto_merge(&self, repo: &Repo, pr: &PullRequest) -> Result<()>;
 
     /// Apply a partial update to branch protection for a branch.
     async fn update_branch_protection(

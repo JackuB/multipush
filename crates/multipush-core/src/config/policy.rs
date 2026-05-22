@@ -1,9 +1,10 @@
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::config::rules::RuleDefinition;
 use crate::model::{Severity, Visibility};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     pub name: String,
@@ -14,7 +15,7 @@ pub struct PolicyConfig {
     pub rules: Vec<RuleDefinition>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TargetConfig {
     pub repos: String,
@@ -30,7 +31,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterConfig {
     HasFile(String),

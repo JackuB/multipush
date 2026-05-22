@@ -8,6 +8,7 @@ mod branch_protection;
 mod ensure_file;
 mod ensure_json_key;
 mod ensure_yaml_key;
+mod file_absent;
 mod file_matches;
 mod key_path;
 mod repo_settings;
@@ -16,6 +17,7 @@ pub use branch_protection::BranchProtectionRule;
 pub use ensure_file::EnsureFileRule;
 pub use ensure_json_key::EnsureJsonKeyRule;
 pub use ensure_yaml_key::EnsureYamlKeyRule;
+pub use file_absent::FileAbsentRule;
 pub use file_matches::FileMatchesRule;
 pub use repo_settings::RepoSettingsRule;
 
@@ -36,5 +38,6 @@ pub fn create_rule(def: &RuleDefinition) -> multipush_core::Result<Box<dyn Rule>
         RuleDefinition::BranchProtection(config) => {
             Ok(Box::new(BranchProtectionRule::new(config.clone())))
         }
+        RuleDefinition::FileAbsent(config) => Ok(Box::new(FileAbsentRule::new(config.clone()))),
     }
 }

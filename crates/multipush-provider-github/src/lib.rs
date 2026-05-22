@@ -639,6 +639,53 @@ impl Provider for GitHubProvider {
         .await
     }
 
+    async fn enable_auto_merge(
+        &self,
+        repo: &Repo,
+        pr: &PullRequest,
+    ) -> multipush_core::Result<()> {
+        async {
+            self.check_rate_limit().await?;
+
+            let pr_detail: serde_json::Value = self
+                .client
+                .get(
+                    format!(
+                        "/repos/{}/{}/pulls/{}",
+                        repo.owner, repo.name, pr.number
+                    ),
+                    None::<&()>,
+                )
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            let node_id = pr_detail["node_id"]
+                .as_str()
+                .ok_or_else(|| CoreError::Provider("Missing node_id on PR".into()))?;
+
+            let query = r#"mutation($prId: ID!) {
+                enablePullRequestAutoMerge(input: { pullRequestId: $prId, mergeMethod: SQUASH }) {
+                    clientMutationId
+                }
+            }"#;
+
+            let body = serde_json::json!({
+                "query": query,
+                "variables": { "prId": node_id },
+            });
+
+            let _: serde_json::Value = self
+                .client
+                .post("/graphql", Some(&body))
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(())
+        }
+        .instrument(debug_span!("api", method = "enable_auto_merge", repo = %repo.full_name, pr = pr.number))
+        .await
+    }
+
     async fn update_branch_protection(
         &self,
         repo: &Repo,

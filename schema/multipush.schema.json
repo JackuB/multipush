@@ -1,0 +1,619 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RootConfig",
+  "description": "Top-level configuration: provider credentials, defaults, and policies.",
+  "type": "object",
+  "required": [
+    "policies",
+    "provider"
+  ],
+  "properties": {
+    "defaults": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DefaultsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PolicyConfig"
+      }
+    },
+    "provider": {
+      "$ref": "#/definitions/ProviderConfig"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ApplyConfig": {
+      "type": "object",
+      "properties": {
+        "auto_merge": {
+          "default": false,
+          "type": "boolean"
+        },
+        "commit_author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "existing_pr": {
+          "$ref": "#/definitions/ExistingPrStrategy"
+        },
+        "pr_draft": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pr_labels": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pr_prefix": {
+          "default": "multipush",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BranchProtectionConfig": {
+      "type": "object",
+      "properties": {
+        "allow_deletions": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_force_pushes": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "Branch to apply protection to. If omitted, the repo's default branch is used.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enforce_admins": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "required_linear_history": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "required_pull_request_reviews": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequiredPullRequestReviewsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_status_checks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequiredStatusChecksConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DefaultsConfig": {
+      "type": "object",
+      "properties": {
+        "apply": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApplyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targets": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TargetConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnsureFileConfig": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/definitions/EnsureFileMode"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnsureFileMode": {
+      "type": "string",
+      "enum": [
+        "create_if_missing",
+        "exact_match",
+        "contains"
+      ]
+    },
+    "EnsureJsonKeyConfig": {
+      "type": "object",
+      "required": [
+        "key",
+        "path"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/definitions/JsonKeyMode"
+        },
+        "path": {
+          "type": "string"
+        },
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "EnsureYamlKeyConfig": {
+      "type": "object",
+      "required": [
+        "key",
+        "path"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/definitions/JsonKeyMode"
+        },
+        "path": {
+          "type": "string"
+        },
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "ExistingPrStrategy": {
+      "type": "string",
+      "enum": [
+        "skip",
+        "update",
+        "recreate"
+      ]
+    },
+    "FileAbsentConfig": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileMatchesConfig": {
+      "type": "object",
+      "required": [
+        "path",
+        "pattern"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FilterConfig": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "has_file"
+          ],
+          "properties": {
+            "has_file": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "topic"
+          ],
+          "properties": {
+            "topic": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "visibility"
+          ],
+          "properties": {
+            "visibility": {
+              "$ref": "#/definitions/Visibility"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "JsonKeyMode": {
+      "type": "string",
+      "enum": [
+        "check_only",
+        "enforce"
+      ]
+    },
+    "PolicyConfig": {
+      "type": "object",
+      "required": [
+        "name",
+        "rules",
+        "targets"
+      ],
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RuleDefinition"
+          }
+        },
+        "severity": {
+          "default": "error",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Severity"
+            }
+          ]
+        },
+        "targets": {
+          "$ref": "#/definitions/TargetConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProviderConfig": {
+      "type": "object",
+      "required": [
+        "org",
+        "token",
+        "type"
+      ],
+      "properties": {
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "org": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ProviderType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProviderType": {
+      "type": "string",
+      "enum": [
+        "github",
+        "gitea"
+      ]
+    },
+    "RepoSettingsConfig": {
+      "type": "object",
+      "properties": {
+        "allow_auto_merge": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_merge_commit": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_rebase_merge": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_squash_merge": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "default_branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delete_branch_on_merge": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "has_issues": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "has_projects": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "has_wiki": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequiredPullRequestReviewsConfig": {
+      "type": "object",
+      "properties": {
+        "dismiss_stale_reviews": {
+          "default": false,
+          "type": "boolean"
+        },
+        "require_code_owner_reviews": {
+          "default": false,
+          "type": "boolean"
+        },
+        "required_approving_review_count": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequiredStatusChecksConfig": {
+      "type": "object",
+      "properties": {
+        "contexts": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "strict": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleDefinition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ensure_file"
+          ],
+          "properties": {
+            "ensure_file": {
+              "$ref": "#/definitions/EnsureFileConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ensure_json_key"
+          ],
+          "properties": {
+            "ensure_json_key": {
+              "$ref": "#/definitions/EnsureJsonKeyConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ensure_yaml_key"
+          ],
+          "properties": {
+            "ensure_yaml_key": {
+              "$ref": "#/definitions/EnsureYamlKeyConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "file_matches"
+          ],
+          "properties": {
+            "file_matches": {
+              "$ref": "#/definitions/FileMatchesConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "repo_settings"
+          ],
+          "properties": {
+            "repo_settings": {
+              "$ref": "#/definitions/RepoSettingsConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "branch_protection"
+          ],
+          "properties": {
+            "branch_protection": {
+              "$ref": "#/definitions/BranchProtectionConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "file_absent"
+          ],
+          "properties": {
+            "file_absent": {
+              "$ref": "#/definitions/FileAbsentConfig"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Severity": {
+      "description": "Policy violation severity level.",
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "TargetConfig": {
+      "type": "object",
+      "required": [
+        "repos"
+      ],
+      "properties": {
+        "exclude": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude_archived": {
+          "default": true,
+          "type": "boolean"
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterConfig"
+          }
+        },
+        "repos": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Visibility": {
+      "description": "Repository visibility level.",
+      "type": "string",
+      "enum": [
+        "public",
+        "private",
+        "internal"
+      ]
+    }
+  }
+}

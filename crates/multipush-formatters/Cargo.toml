@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 multipush-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tabled = { workspace = true }
 owo-colors = { workspace = true }
-serde_json = { workspace = true }

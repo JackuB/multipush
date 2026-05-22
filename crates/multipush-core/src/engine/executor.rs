@@ -92,6 +92,7 @@ pub async fn execute(
         .unwrap_or("multipush");
 
     let existing_pr_strategy = apply_config.map(|a| a.existing_pr).unwrap_or_default();
+    let auto_merge = apply_config.map(|a| a.auto_merge).unwrap_or(false);
 
     let mut prs_created = Vec::new();
     let mut prs_updated = Vec::new();
@@ -326,6 +327,12 @@ pub async fn execute(
                             url = %pr.url,
                             "created PR"
                         );
+                        if auto_merge && !dry_run {
+                            match provider.enable_auto_merge(&repo, &pr).await {
+                                Ok(()) => info!(repo = %repo.full_name, pr = pr.number, "auto-merge enabled"),
+                                Err(e) => warn!(repo = %repo.full_name, pr = pr.number, error = %e, "failed to enable auto-merge"),
+                            }
+                        }
                         prs_created.push(PrAction {
                             repo_name: repo.full_name.clone(),
                             policy_name: policy_name.clone(),
@@ -637,6 +644,7 @@ mod tests {
                     pr_labels: vec![],
                     pr_draft: false,
                     existing_pr: ExistingPrStrategy::Skip,
+                    auto_merge: false,
                 }),
             }),
             policies: vec![],
@@ -759,6 +767,13 @@ mod tests {
             ) -> Result<()> {
                 unimplemented!()
             }
+            async fn enable_auto_merge(
+                &self,
+                _repo: &Repo,
+                _pr: &PullRequest,
+            ) -> Result<()> {
+                unimplemented!()
+            }
             async fn get_branch_protection(
                 &self,
                 _repo: &Repo,
@@ -821,5 +836,172 @@ mod tests {
         assert!(body.contains("Create LICENSE file"));
         assert!(body.contains("`LICENSE` (create/update)"));
         assert!(body.contains("multipush"));
+    }
+
+    fn config_with_auto_merge() -> RootConfig {
+        use crate::config::{ApplyConfig, DefaultsConfig, ProviderConfig, ProviderType};
+
+        RootConfig {
+            provider: ProviderConfig {
+                provider_type: ProviderType::Github,
+                org: "org".to_string(),
+                token: "ghp_test".to_string(),
+                base_url: None,
+            },
+            defaults: Some(DefaultsConfig {
+                targets: None,
+                apply: Some(ApplyConfig {
+                    pr_prefix: "multipush".to_string(),
+                    commit_author: None,
+                    pr_labels: vec![],
+                    pr_draft: false,
+                    existing_pr: Default::default(),
+                    auto_merge: true,
+                }),
+            }),
+            policies: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_merge_called_after_pr_creation() {
+        let provider = MockProvider::new(vec![]);
+        let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
+        let config = config_with_auto_merge();
+
+        let result = execute(&report, &config, &provider, false, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.prs_created.len(), 2);
+        assert_eq!(provider.enable_auto_merge_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn auto_merge_not_called_on_dry_run() {
+        let provider = MockProvider::new(vec![]);
+        let report = make_report_with_failures(&["org/alpha"], true);
+        let config = config_with_auto_merge();
+
+        let result = execute(&report, &config, &provider, true, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.prs_created.len(), 1);
+        assert_eq!(provider.enable_auto_merge_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn auto_merge_failure_does_not_prevent_pr() {
+        use crate::error::CoreError;
+        use crate::model::RepoSettingsPatch;
+
+        struct AutoMergeFailProvider {
+            create_pr_calls: AtomicUsize,
+            enable_auto_merge_calls: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl Provider for AutoMergeFailProvider {
+            fn name(&self) -> &str {
+                "mock"
+            }
+            async fn list_repos(&self, _org: &str) -> Result<Vec<Repo>> {
+                Ok(vec![])
+            }
+            async fn get_file(
+                &self,
+                _repo: &Repo,
+                _path: &str,
+                _git_ref: &str,
+            ) -> Result<Option<FileContent>> {
+                Ok(None)
+            }
+            async fn get_repo_settings(&self, _repo: &Repo) -> Result<RepoSettings> {
+                unimplemented!()
+            }
+            async fn find_open_pr(
+                &self,
+                _repo: &Repo,
+                _head: &str,
+            ) -> Result<Option<PullRequest>> {
+                Ok(None)
+            }
+            async fn create_pr(
+                &self,
+                repo: &Repo,
+                branch: &str,
+                _base: &str,
+                title: &str,
+                _body: &str,
+                _changes: Vec<FileChange>,
+            ) -> Result<PullRequest> {
+                let n = self.create_pr_calls.fetch_add(1, Ordering::SeqCst) as u64 + 1;
+                Ok(PullRequest {
+                    number: n,
+                    title: title.to_string(),
+                    head_branch: branch.to_string(),
+                    url: format!("https://github.com/{}/pull/{n}", repo.full_name),
+                    state: PrState::Open,
+                })
+            }
+            async fn update_pr(
+                &self,
+                _repo: &Repo,
+                pr: &PullRequest,
+                _changes: Vec<FileChange>,
+            ) -> Result<PullRequest> {
+                Ok(pr.clone())
+            }
+            async fn update_repo_settings(
+                &self,
+                _repo: &Repo,
+                _patch: &RepoSettingsPatch,
+            ) -> Result<()> {
+                unimplemented!()
+            }
+            async fn enable_auto_merge(
+                &self,
+                _repo: &Repo,
+                _pr: &PullRequest,
+            ) -> Result<()> {
+                self.enable_auto_merge_calls
+                    .fetch_add(1, Ordering::SeqCst);
+                Err(CoreError::Provider("auto-merge not enabled on repo".into()))
+            }
+            async fn get_branch_protection(
+                &self,
+                _repo: &Repo,
+                _branch: &str,
+            ) -> Result<Option<crate::model::BranchProtection>> {
+                unimplemented!()
+            }
+            async fn update_branch_protection(
+                &self,
+                _repo: &Repo,
+                _branch: &str,
+                _patch: &crate::model::BranchProtectionPatch,
+            ) -> Result<()> {
+                unimplemented!()
+            }
+        }
+
+        let provider = AutoMergeFailProvider {
+            create_pr_calls: AtomicUsize::new(0),
+            enable_auto_merge_calls: AtomicUsize::new(0),
+        };
+        let report = make_report_with_failures(&["org/alpha"], true);
+        let config = config_with_auto_merge();
+
+        let result = execute(&report, &config, &provider, false, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.prs_created.len(), 1);
+        assert_eq!(
+            provider.enable_auto_merge_calls.load(Ordering::SeqCst),
+            1
+        );
+        assert!(result.prs_created[0].error.is_none());
     }
 }

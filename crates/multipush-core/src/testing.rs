@@ -27,6 +27,7 @@ pub struct MockProvider {
     pub update_repo_settings_history: Mutex<Vec<(String, RepoSettingsPatch)>>,
     pub update_branch_protection_calls: AtomicUsize,
     pub update_branch_protection_history: Mutex<Vec<(String, String, BranchProtectionPatch)>>,
+    pub enable_auto_merge_calls: AtomicUsize,
 }
 
 impl MockProvider {
@@ -43,6 +44,7 @@ impl MockProvider {
             update_repo_settings_history: Mutex::new(Vec::new()),
             update_branch_protection_calls: AtomicUsize::new(0),
             update_branch_protection_history: Mutex::new(Vec::new()),
+            enable_auto_merge_calls: AtomicUsize::new(0),
         }
     }
 
@@ -169,6 +171,12 @@ impl Provider for MockProvider {
             .lock()
             .unwrap()
             .push((repo.full_name.clone(), patch.clone()));
+        Ok(())
+    }
+
+    async fn enable_auto_merge(&self, _repo: &Repo, _pr: &PullRequest) -> Result<()> {
+        self.enable_auto_merge_calls
+            .fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 

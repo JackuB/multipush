@@ -1,6 +1,7 @@
+use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleDefinition {
     EnsureFile(EnsureFileConfig),
@@ -9,9 +10,10 @@ pub enum RuleDefinition {
     FileMatches(FileMatchesConfig),
     RepoSettings(RepoSettingsConfig),
     BranchProtection(BranchProtectionConfig),
+    FileAbsent(FileAbsentConfig),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnsureFileConfig {
     pub path: String,
@@ -20,7 +22,7 @@ pub struct EnsureFileConfig {
     pub mode: EnsureFileMode,
 }
 
-#[derive(Debug, Default, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EnsureFileMode {
     #[default]
@@ -29,7 +31,7 @@ pub enum EnsureFileMode {
     Contains,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnsureJsonKeyConfig {
     pub path: String,
@@ -39,7 +41,7 @@ pub struct EnsureJsonKeyConfig {
     pub mode: JsonKeyMode,
 }
 
-#[derive(Debug, Default, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JsonKeyMode {
     #[default]
@@ -47,7 +49,7 @@ pub enum JsonKeyMode {
     Enforce,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnsureYamlKeyConfig {
     pub path: String,
@@ -57,14 +59,14 @@ pub struct EnsureYamlKeyConfig {
     pub mode: JsonKeyMode,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FileMatchesConfig {
     pub path: String,
     pub pattern: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequiredStatusChecksConfig {
     #[serde(default)]
@@ -73,7 +75,7 @@ pub struct RequiredStatusChecksConfig {
     pub contexts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequiredPullRequestReviewsConfig {
     #[serde(default)]
@@ -84,7 +86,7 @@ pub struct RequiredPullRequestReviewsConfig {
     pub require_code_owner_reviews: bool,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BranchProtectionConfig {
     /// Branch to apply protection to. If omitted, the repo's default branch is used.
@@ -104,7 +106,7 @@ pub struct BranchProtectionConfig {
     pub allow_deletions: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RepoSettingsConfig {
     #[serde(default)]
@@ -125,4 +127,10 @@ pub struct RepoSettingsConfig {
     pub allow_auto_merge: Option<bool>,
     #[serde(default)]
     pub default_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileAbsentConfig {
+    pub path: String,
 }

@@ -199,6 +199,14 @@ mod tests {
             unimplemented!()
         }
 
+        async fn enable_auto_merge(
+            &self,
+            _repo: &Repo,
+            _pr: &multipush_core::model::PullRequest,
+        ) -> multipush_core::Result<()> {
+            unimplemented!()
+        }
+
         async fn get_branch_protection(
             &self,
             _repo: &Repo,

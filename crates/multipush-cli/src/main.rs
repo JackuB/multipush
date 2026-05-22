@@ -102,6 +102,13 @@ enum Command {
         quiet: bool,
     },
 
+    /// Print JSON Schema for the config file format
+    Schema {
+        /// Write to file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Apply remediations by creating/updating PRs
     Apply {
         /// Config file or directory (repeatable)
@@ -127,6 +134,10 @@ enum Command {
         /// Maximum concurrent repo evaluations
         #[arg(long, default_value = "10")]
         concurrency: usize,
+
+        /// Enable auto-merge on created PRs
+        #[arg(long)]
+        auto_merge: bool,
 
         /// Increase verbosity (-v = info, -vv = debug, -vvv = trace)
         #[arg(short, long, action = clap::ArgAction::Count)]
@@ -229,6 +240,13 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Schema { output } => match run_schema(output) {
+            Ok(code) => code,
+            Err(e) => {
+                error!("{e:#}");
+                ExitCode::from(2)
+            }
+        },
         Command::Apply {
             config,
             format,
@@ -236,6 +254,7 @@ fn main() -> ExitCode {
             dry_run,
             max_prs,
             concurrency,
+            auto_merge,
             verbose,
             quiet,
             no_color,
@@ -250,6 +269,7 @@ fn main() -> ExitCode {
                 dry_run,
                 max_prs,
                 concurrency,
+                auto_merge,
                 no_color,
                 fail_on,
             ) {
@@ -335,11 +355,32 @@ fn run_apply(
     dry_run: bool,
     max_prs: usize,
     concurrency: usize,
+    auto_merge: bool,
     no_color: bool,
     fail_on: Severity,
 ) -> Result<ExitCode> {
     let sources = paths_to_sources(&config_paths);
     let mut config = load_config(&sources).context("failed to load config")?;
+
+    if auto_merge {
+        let defaults = config.defaults.get_or_insert(
+            multipush_core::config::DefaultsConfig {
+                targets: None,
+                apply: None,
+            }
+        );
+        let apply = defaults.apply.get_or_insert(
+            multipush_core::config::ApplyConfig {
+                pr_prefix: "multipush".to_string(),
+                commit_author: None,
+                pr_labels: vec![],
+                pr_draft: false,
+                existing_pr: Default::default(),
+                auto_merge: false,
+            }
+        );
+        apply.auto_merge = true;
+    }
 
     if !policy_filter.is_empty() {
         config.policies.retain(|p| policy_filter.contains(&p.name));
@@ -520,6 +561,16 @@ fn run_validate(config_paths: Vec<PathBuf>) -> Result<ExitCode> {
     }
 }
 
+fn run_schema(output: Option<PathBuf>) -> Result<ExitCode> {
+    let schema = schemars::schema_for!(multipush_core::config::RootConfig);
+    let json = serde_json::to_string_pretty(&schema)?;
+    match output {
+        Some(path) => std::fs::write(&path, &json)?,
+        None => println!("{json}"),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn run_list_rules(verbose: u8, quiet: bool) -> Result<ExitCode> {
     let rules = [
         (
@@ -532,6 +583,10 @@ fn run_list_rules(verbose: u8, quiet: bool) -> Result<ExitCode> {
         (
             "repo_settings",
             "Ensure repository settings (merge options, features) match policy",
+        ),
+        (
+            "file_absent",
+            "Ensure a file does NOT exist (with deletion remediation)",
         ),
     ];
 
