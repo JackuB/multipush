@@ -175,8 +175,7 @@ impl Provider for MockProvider {
     }
 
     async fn enable_auto_merge(&self, _repo: &Repo, _pr: &PullRequest) -> Result<()> {
-        self.enable_auto_merge_calls
-            .fetch_add(1, Ordering::SeqCst);
+        self.enable_auto_merge_calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 

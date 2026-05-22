@@ -639,11 +639,7 @@ impl Provider for GitHubProvider {
         .await
     }
 
-    async fn enable_auto_merge(
-        &self,
-        repo: &Repo,
-        pr: &PullRequest,
-    ) -> multipush_core::Result<()> {
+    async fn enable_auto_merge(&self, repo: &Repo, pr: &PullRequest) -> multipush_core::Result<()> {
         async {
             self.check_rate_limit().await?;
 

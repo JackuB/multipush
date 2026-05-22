@@ -4,16 +4,38 @@
 
 Declarative policy-as-code for repository governance. Define what your repos should look like in YAML, and multipush checks compliance and opens PRs to fix violations — all through the API, no cloning required.
 
-## Why multipush?
+## What it's for
 
-| Feature | multipush | multi-gitter | Allstar | Repolinter |
-|---|---|---|---|---|
-| Declarative YAML policies | Yes | No (imperative scripts) | Yes (limited) | Yes |
-| API-only (no clone) | Yes | No (clones repos) | Yes | No (clones repos) |
-| Auto-remediation via PR | Yes | Yes | No (issues only) | No |
-| Custom rules | Yes (Rust traits) | Yes (any script) | No | Yes (JSON schema) |
-| Multi-file config | Yes | No | No | No |
-| Built-in recipes | Yes | No | No | No |
+Once an organization has more than a handful of repositories, keeping them consistent becomes its own job. Every repo should have a CODEOWNERS file. Every Node project should declare a license. Every public repo needs a SECURITY.md. Every default branch should require reviews. Multiplied across hundreds of repos and dozens of teams, this drift is everywhere — and nobody owns it.
+
+multipush is the tool for that work. You write your standards as YAML policies once. multipush evaluates them against every repo in your org via API, reports what's out of compliance, and — when you're ready — opens PRs that fix the gaps. The same config in CI gives you a continuously enforced baseline.
+
+## What you can do with it
+
+- **Audit an org for compliance.** Read-only `check` produces a per-repo report in table, JSON, markdown, or SARIF. Wire it into CI and treat drift as a build failure.
+- **Roll out a new standard.** Declare the desired file, key, or repo setting; `apply` opens one PR per repo with the fix.
+- **Govern repo settings, not just files.** Toggle `has_wiki`, enforce squash-merge, require branch protection — through the same policy file.
+- **Stay idempotent.** Branch names are deterministic (`multipush/{policy}`). Re-running `apply` updates the existing PR in place — no force-pushes, no duplicates, no lost review comments.
+- **Bootstrap fast with recipes.** Built-in templates for CODEOWNERS, SECURITY.md, LICENSE, .editorconfig, .gitignore, Dependabot.
+
+## When to reach for it
+
+multipush fits when:
+
+- You manage many repos and the policies you care about can be expressed declaratively — "this file should exist", "this JSON key should equal X", "this setting should be on".
+- You want a single source of truth for org standards that lives in a repo, gets reviewed in PRs, and runs in CI.
+- You want remediation to flow through normal code review (PRs), not silent automation.
+
+It's not the right tool if you need to run arbitrary scripts across repos, or if your governance needs are fully covered by GitHub's branch protection and rulesets alone.
+
+## How it's best used
+
+The natural workflow is two-phase:
+
+1. **Continuous `check` in CI.** A scheduled job (nightly or weekly) runs `multipush check --fail-on error` against your org and fails loudly when drift appears. The report is your compliance dashboard.
+2. **On-demand `apply` for rollout.** When you ship a new policy, run `apply --dry-run` first to see the blast radius, then `apply --max-prs N` to open PRs in waves until you're clean.
+
+Keep policies in a repo, review changes through PRs, and gate them behind `multipush validate` in CI. The same config drives both the auditor and the fixer — there is no second source of truth to drift.
 
 ## Quick start
 

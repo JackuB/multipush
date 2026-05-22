@@ -122,9 +122,7 @@ impl Formatter for SarifFormatter {
                 results.push(SarifResult {
                     rule_id: policy.policy_name.clone(),
                     level,
-                    message: SarifMessage {
-                        text: message_text,
-                    },
+                    message: SarifMessage { text: message_text },
                     locations: vec![SarifLocation {
                         physical_location: SarifPhysicalLocation {
                             artifact_location: SarifArtifactLocation {
@@ -369,6 +367,9 @@ mod tests {
 
         let results = parsed["runs"][0]["results"].as_array().unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "org/fail");
+        assert_eq!(
+            results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "org/fail"
+        );
     }
 }

@@ -363,22 +363,22 @@ fn run_apply(
     let mut config = load_config(&sources).context("failed to load config")?;
 
     if auto_merge {
-        let defaults = config.defaults.get_or_insert(
-            multipush_core::config::DefaultsConfig {
+        let defaults = config
+            .defaults
+            .get_or_insert(multipush_core::config::DefaultsConfig {
                 targets: None,
                 apply: None,
-            }
-        );
-        let apply = defaults.apply.get_or_insert(
-            multipush_core::config::ApplyConfig {
+            });
+        let apply = defaults
+            .apply
+            .get_or_insert(multipush_core::config::ApplyConfig {
                 pr_prefix: "multipush".to_string(),
                 commit_author: None,
                 pr_labels: vec![],
                 pr_draft: false,
                 existing_pr: Default::default(),
                 auto_merge: false,
-            }
-        );
+            });
         apply.auto_merge = true;
     }
 
