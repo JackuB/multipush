@@ -62,6 +62,7 @@ async fn apply_mode_existing_pr_skip() {
             pr_labels: vec![],
             pr_draft: false,
             existing_pr: ExistingPrStrategy::Skip,
+            auto_merge: false,
         }),
     });
 

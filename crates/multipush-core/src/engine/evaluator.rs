@@ -156,20 +156,17 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EnsureFileConfig, EnsureFileMode, RuleDefinition, TargetConfig};
+    use crate::config::{EnsureFileConfig, RuleDefinition, TargetConfig};
     use crate::testing::{make_repo, test_config, MockProvider};
     use async_trait::async_trait;
 
     fn simple_factory(policy: &PolicyConfig) -> Result<Vec<Box<dyn Rule>>> {
         let mut rules: Vec<Box<dyn Rule>> = Vec::new();
         for def in &policy.rules {
-            match def {
-                RuleDefinition::EnsureFile(cfg) => {
-                    rules.push(Box::new(SimpleEnsureFileRule {
-                        path: cfg.path.clone(),
-                    }));
-                }
-                _ => {}
+            if let RuleDefinition::EnsureFile(cfg) = def {
+                rules.push(Box::new(SimpleEnsureFileRule {
+                    path: cfg.candidate_paths().first().cloned().unwrap_or_default(),
+                }));
             }
         }
         Ok(rules)
@@ -222,9 +219,12 @@ mod tests {
                 filters: vec![],
             },
             rules: vec![RuleDefinition::EnsureFile(EnsureFileConfig {
-                path: "README.md".to_string(),
-                content: None,
-                mode: EnsureFileMode::CreateIfMissing,
+                path: Some("README.md".to_string()),
+                paths: vec![],
+                default_content: None,
+                must_contain: None,
+                must_match: None,
+                must_equal: None,
             })],
         }]);
 
@@ -251,9 +251,12 @@ mod tests {
                 filters: vec![],
             },
             rules: vec![RuleDefinition::EnsureFile(EnsureFileConfig {
-                path: "README.md".to_string(),
-                content: None,
-                mode: EnsureFileMode::CreateIfMissing,
+                path: Some("README.md".to_string()),
+                paths: vec![],
+                default_content: None,
+                must_contain: None,
+                must_match: None,
+                must_equal: None,
             })],
         }]);
 

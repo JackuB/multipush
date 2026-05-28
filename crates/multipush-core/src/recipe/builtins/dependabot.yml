@@ -23,7 +23,7 @@ params:
 rules:
   - !ensure_file
     path: .github/dependabot.yml
-    content: |
+    default_content: |
       version: 2
       updates:
         - package-ecosystem: "{{ ecosystem }}"

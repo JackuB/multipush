@@ -5,16 +5,13 @@ params:
     type: string
     required: true
     description: "Default code owner (e.g. @my-team)"
-  mode:
-    type: string
-    required: false
-    default: create_if_missing
-    description: "File ensure mode"
-    enum:
-      - create_if_missing
-      - exact_match
+# GitHub honours CODEOWNERS in the repo root, .github/, or docs/. Treat any
+# of them as compliant; create the root file with the default owner when none
+# exist.
 rules:
   - !ensure_file
-    path: CODEOWNERS
-    content: "* {{ default_owner }}\n"
-    mode: "{{ mode }}"
+    paths:
+      - CODEOWNERS
+      - .github/CODEOWNERS
+      - docs/CODEOWNERS
+    default_content: "* {{ default_owner }}\n"

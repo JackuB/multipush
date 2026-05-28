@@ -314,10 +314,10 @@ fn run_check(
         }
     }
 
-    let provider = registry::create_provider(&config.provider)?;
     let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
+    let provider = rt.block_on(async { registry::create_provider(&config.provider) })?;
     let report = rt.block_on(evaluate(
         &config,
         provider.as_ref(),
@@ -389,10 +389,10 @@ fn run_apply(
         }
     }
 
-    let provider = registry::create_provider(&config.provider)?;
     let formatter = registry::create_formatter(&format, no_color)?;
 
     let rt = tokio::runtime::Runtime::new()?;
+    let provider = rt.block_on(async { registry::create_provider(&config.provider) })?;
     let report = rt.block_on(evaluate(
         &config,
         provider.as_ref(),
@@ -440,8 +440,8 @@ fn run_list_repos(config_paths: Vec<PathBuf>, policy_filter: Option<String>) -> 
         }
     }
 
-    let provider = registry::create_provider(&config.provider)?;
     let rt = tokio::runtime::Runtime::new()?;
+    let provider = rt.block_on(async { registry::create_provider(&config.provider) })?;
     let all_repos = rt.block_on(provider.list_repos(&config.provider.org))?;
 
     use std::collections::BTreeMap;

@@ -17,7 +17,7 @@ params:
 rules:
   - !ensure_file
     path: .editorconfig
-    content: |
+    default_content: |
       root = true
 
       [*]

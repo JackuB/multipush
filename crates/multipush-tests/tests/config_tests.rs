@@ -59,8 +59,12 @@ fn recipe_expansion() {
 
     match &config.policies[0].rules[0] {
         RuleDefinition::EnsureFile(cfg) => {
-            assert_eq!(cfg.path, "CODEOWNERS");
-            assert!(cfg.content.as_ref().unwrap().contains("@platform-team"));
+            assert_eq!(cfg.candidate_paths()[0], "CODEOWNERS");
+            assert!(cfg
+                .default_content
+                .as_ref()
+                .unwrap()
+                .contains("@platform-team"));
         }
         other => panic!("expected EnsureFile, got {other:?}"),
     }

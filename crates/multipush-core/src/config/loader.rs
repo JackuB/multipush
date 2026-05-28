@@ -427,8 +427,35 @@ fn validate_rule(
     let ctx = format!("policy '{}', rule {}", policy_name, index + 1);
     match rule {
         RuleDefinition::EnsureFile(cfg) => {
-            if cfg.path.is_empty() {
-                errors.push(format!("{ctx}: ensure_file.path must not be empty"));
+            let candidates = cfg.candidate_paths();
+            if candidates.is_empty() {
+                errors.push(format!(
+                    "{ctx}: ensure_file requires either 'path' or a non-empty 'paths'"
+                ));
+            } else if candidates.iter().any(|p| p.is_empty()) {
+                errors.push(format!("{ctx}: ensure_file paths must not be empty"));
+            }
+            let predicates = [
+                cfg.must_contain.is_some(),
+                cfg.must_match.is_some(),
+                cfg.must_equal.is_some(),
+            ];
+            if predicates.iter().filter(|set| **set).count() > 1 {
+                errors.push(format!(
+                    "{ctx}: ensure_file accepts at most one of must_contain, must_match, must_equal"
+                ));
+            }
+            if let Some(pattern) = &cfg.must_match {
+                if let Err(e) = regex::Regex::new(pattern) {
+                    errors.push(format!(
+                        "{ctx}: ensure_file.must_match is invalid regex: {e}"
+                    ));
+                }
+            }
+            if cfg.must_equal.is_some() && cfg.default_content.is_some() {
+                errors.push(format!(
+                    "{ctx}: ensure_file.default_content is redundant with must_equal (must_equal governs creation); set only must_equal"
+                ));
             }
         }
         RuleDefinition::EnsureJsonKey(cfg) => {
@@ -762,7 +789,7 @@ policies:
         let err = load_single(yaml).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("ensure_file.path must not be empty"),
+            msg.contains("ensure_file paths must not be empty"),
             "got: {msg}"
         );
         assert!(
@@ -898,7 +925,7 @@ policies:
         // The second file's rule should win
         match &config.policies[0].rules[0] {
             crate::config::RuleDefinition::EnsureFile(cfg) => {
-                assert_eq!(cfg.path, "LICENSE");
+                assert_eq!(cfg.path.as_deref(), Some("LICENSE"));
             }
             _ => panic!("expected EnsureFile"),
         }
@@ -975,15 +1002,15 @@ provider:
         let merged = deep_merge(base, overlay);
         let m = merged.as_mapping().unwrap();
         assert_eq!(
-            m.get(&Value::String("a".into())),
+            m.get(Value::String("a".into())),
             Some(&Value::Number(1.into()))
         );
         assert_eq!(
-            m.get(&Value::String("b".into())),
+            m.get(Value::String("b".into())),
             Some(&Value::Number(3.into()))
         );
         assert_eq!(
-            m.get(&Value::String("c".into())),
+            m.get(Value::String("c".into())),
             Some(&Value::Number(4.into()))
         );
     }
@@ -1010,8 +1037,19 @@ policies:
 
         match &config.policies[0].rules[0] {
             crate::config::RuleDefinition::EnsureFile(cfg) => {
-                assert_eq!(cfg.path, "CODEOWNERS");
-                assert!(cfg.content.as_ref().unwrap().contains("@platform-team"));
+                assert_eq!(
+                    cfg.candidate_paths(),
+                    vec![
+                        "CODEOWNERS".to_string(),
+                        ".github/CODEOWNERS".to_string(),
+                        "docs/CODEOWNERS".to_string(),
+                    ]
+                );
+                assert!(cfg
+                    .default_content
+                    .as_ref()
+                    .unwrap()
+                    .contains("@platform-team"));
             }
             _ => panic!("expected EnsureFile rule"),
         }

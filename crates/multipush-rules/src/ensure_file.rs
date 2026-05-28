@@ -1,9 +1,11 @@
 use async_trait::async_trait;
+use regex::Regex;
 use tracing::debug;
 
-use multipush_core::config::{EnsureFileConfig, EnsureFileMode};
+use multipush_core::config::EnsureFileConfig;
 use multipush_core::model::FileChange;
 use multipush_core::rule::{Remediation, Rule, RuleContext, RuleResult};
+use multipush_core::CoreError;
 
 pub struct EnsureFileRule {
     config: EnsureFileConfig,
@@ -22,85 +24,121 @@ impl Rule for EnsureFileRule {
     }
 
     fn description(&self) -> String {
-        format!("Ensure file {} exists", self.config.path)
+        let paths = self.config.candidate_paths();
+        if paths.len() == 1 {
+            format!("Ensure file {} exists", paths[0])
+        } else {
+            format!("Ensure a file exists at one of: {}", paths.join(", "))
+        }
     }
 
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> multipush_core::Result<RuleResult> {
-        let path = &self.config.path;
-        debug!(path = path.as_str(), repo = %ctx.repo.full_name, "evaluating ensure_file rule");
+        let paths = self.config.candidate_paths();
+        debug!(paths = ?paths, repo = %ctx.repo.full_name, "evaluating ensure_file rule");
 
-        let file = ctx
-            .provider
-            .get_file(ctx.repo, path, &ctx.repo.default_branch)
-            .await?;
+        // Fetch every candidate path, preserving priority order.
+        let mut fetched: Vec<(String, Option<String>)> = Vec::with_capacity(paths.len());
+        for path in &paths {
+            let file = ctx
+                .provider
+                .get_file(ctx.repo, path, &ctx.repo.default_branch)
+                .await?;
+            fetched.push((path.clone(), file.map(|f| f.content)));
+        }
 
-        match file {
-            None => {
-                let changes = match self.config.content.as_deref() {
-                    Some(content) => vec![FileChange {
-                        path: path.clone(),
-                        content: Some(content.to_string()),
-                        message: format!("Create file {path}"),
-                    }],
-                    None => vec![],
-                };
+        // The canonical location used when creating the file as a remediation.
+        let canonical = paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "CODEOWNERS".to_string());
+        let existing: Vec<(&str, &str)> = fetched
+            .iter()
+            .filter_map(|(p, c)| c.as_deref().map(|content| (p.as_str(), content)))
+            .collect();
 
+        // No file at any candidate path: same outcome regardless of mode —
+        // fail and (when content is known) offer to create the canonical one.
+        if existing.is_empty() {
+            let detail = if paths.len() == 1 {
+                format!("File {} does not exist", paths[0])
+            } else {
+                format!("No file found at any of: {}", paths.join(", "))
+            };
+            let changes = match self.config.creation_body() {
+                Some(body) => vec![FileChange {
+                    path: canonical.clone(),
+                    content: Some(body.to_string()),
+                    message: format!("Create file {canonical}"),
+                }],
+                None => vec![],
+            };
+            return Ok(RuleResult::Fail {
+                detail,
+                remediation: Some(Remediation::FileChanges {
+                    description: format!("Create file {canonical}"),
+                    changes,
+                }),
+            });
+        }
+
+        // At least one file exists. Apply the predicate (at most one is set;
+        // enforced by config validation). With no predicate the file only has
+        // to exist.
+        if let Some(expected) = self.config.must_equal.as_deref() {
+            if let Some((path, _)) = existing.iter().find(|(_, c)| *c == expected) {
+                Ok(RuleResult::Pass {
+                    detail: format!("File {path} matches required content"),
+                })
+            } else {
+                // Exists but drifted: overwrite the highest-priority file.
+                let target = existing[0].0.to_string();
                 Ok(RuleResult::Fail {
-                    detail: format!("File {path} does not exist"),
+                    detail: format!("File {target} content does not match required content"),
                     remediation: Some(Remediation::FileChanges {
-                        description: format!("Create file {path}"),
-                        changes,
+                        description: format!("Update file {target} to required content"),
+                        changes: vec![FileChange {
+                            path: target.clone(),
+                            content: Some(expected.to_string()),
+                            message: format!("Update file {target} to match policy"),
+                        }],
                     }),
                 })
             }
-            Some(existing) => match self.config.mode {
-                EnsureFileMode::CreateIfMissing => Ok(RuleResult::Pass {
-                    detail: format!("File {path} exists"),
-                }),
-                EnsureFileMode::ExactMatch => match self.config.content.as_deref() {
-                    None => Ok(RuleResult::Pass {
-                        detail: format!("File {path} exists (no expected content to match)"),
-                    }),
-                    Some(expected) => {
-                        if existing.content == expected {
-                            Ok(RuleResult::Pass {
-                                detail: format!("File {path} exists with expected content"),
-                            })
-                        } else {
-                            Ok(RuleResult::Fail {
-                                detail: format!("File {path} content does not match expected"),
-                                remediation: Some(Remediation::FileChanges {
-                                    description: format!(
-                                        "Update file {path} to match expected content"
-                                    ),
-                                    changes: vec![FileChange {
-                                        path: path.clone(),
-                                        content: Some(expected.to_string()),
-                                        message: format!("Update file {path} to match policy"),
-                                    }],
-                                }),
-                            })
-                        }
-                    }
-                },
-                EnsureFileMode::Contains => match self.config.content.as_deref() {
-                    None => Ok(RuleResult::Pass {
-                        detail: format!("File {path} exists (no content to check for)"),
-                    }),
-                    Some(expected) => {
-                        if existing.content.contains(expected) {
-                            Ok(RuleResult::Pass {
-                                detail: format!("File {path} contains expected content"),
-                            })
-                        } else {
-                            Ok(RuleResult::Fail {
-                                detail: format!("File {path} does not contain expected content"),
-                                remediation: None,
-                            })
-                        }
-                    }
-                },
-            },
+        } else if let Some(needle) = self.config.must_contain.as_deref() {
+            if let Some((path, _)) = existing.iter().find(|(_, c)| c.contains(needle)) {
+                Ok(RuleResult::Pass {
+                    detail: format!("File {path} contains required content"),
+                })
+            } else {
+                // Cannot safely splice a substring into a hand-written file.
+                Ok(RuleResult::Fail {
+                    detail: format!(
+                        "File {} does not contain required content: {needle:?}",
+                        existing[0].0
+                    ),
+                    remediation: None,
+                })
+            }
+        } else if let Some(pattern) = self.config.must_match.as_deref() {
+            let re = Regex::new(pattern)
+                .map_err(|e| CoreError::RuleEvaluation(format!("invalid must_match regex: {e}")))?;
+            if let Some((path, _)) = existing.iter().find(|(_, c)| re.is_match(c)) {
+                Ok(RuleResult::Pass {
+                    detail: format!("File {path} matches required pattern"),
+                })
+            } else {
+                Ok(RuleResult::Fail {
+                    detail: format!(
+                        "File {} does not match required pattern: /{pattern}/",
+                        existing[0].0
+                    ),
+                    remediation: None,
+                })
+            }
+        } else {
+            Ok(RuleResult::Pass {
+                detail: format!("File {} exists", existing[0].0),
+            })
         }
     }
 }
@@ -239,21 +277,34 @@ mod tests {
         }
     }
 
+    /// Build an EnsureFileConfig with everything defaulted; tests set only the
+    /// fields they exercise.
+    fn cfg() -> EnsureFileConfig {
+        EnsureFileConfig {
+            path: None,
+            paths: vec![],
+            default_content: None,
+            must_contain: None,
+            must_match: None,
+            must_equal: None,
+        }
+    }
+
     #[tokio::test]
-    async fn file_missing_no_content() {
+    async fn missing_no_default_content_flags_only() {
         let provider = TestProvider::new();
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: "README.md".to_string(),
-            content: None,
-            mode: EnsureFileMode::CreateIfMissing,
+            path: Some("README.md".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
         match result {
             RuleResult::Fail {
@@ -261,8 +312,7 @@ mod tests {
                 remediation,
             } => {
                 assert!(detail.contains("does not exist"));
-                let rem = remediation.unwrap();
-                match rem {
+                match remediation.unwrap() {
                     Remediation::FileChanges { changes, .. } => assert!(changes.is_empty()),
                     other => panic!("expected FileChanges remediation, got {other:?}"),
                 }
@@ -272,104 +322,93 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_missing_with_content() {
+    async fn missing_with_default_content_creates_it() {
         let provider = TestProvider::new();
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: "LICENSE".to_string(),
-            content: Some("MIT License".to_string()),
-            mode: EnsureFileMode::CreateIfMissing,
+            path: Some("LICENSE".to_string()),
+            default_content: Some("MIT License".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
         match result {
-            RuleResult::Fail {
-                detail,
-                remediation,
-            } => {
-                assert!(detail.contains("does not exist"));
-                let rem = remediation.unwrap();
-                match rem {
-                    Remediation::FileChanges { changes, .. } => {
-                        assert_eq!(changes.len(), 1);
-                        assert_eq!(changes[0].path, "LICENSE");
-                        assert_eq!(changes[0].content.as_deref(), Some("MIT License"));
-                    }
-                    other => panic!("expected FileChanges remediation, got {other:?}"),
+            RuleResult::Fail { remediation, .. } => match remediation.unwrap() {
+                Remediation::FileChanges { changes, .. } => {
+                    assert_eq!(changes.len(), 1);
+                    assert_eq!(changes[0].path, "LICENSE");
+                    assert_eq!(changes[0].content.as_deref(), Some("MIT License"));
                 }
-            }
+                other => panic!("expected FileChanges remediation, got {other:?}"),
+            },
             other => panic!("expected Fail, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn file_exists_create_if_missing() {
+    async fn exists_no_predicate_passes() {
         let provider = TestProvider::new().with_file("README.md", "# Hello");
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: "README.md".to_string(),
-            content: Some("different content".to_string()),
-            mode: EnsureFileMode::CreateIfMissing,
+            path: Some("README.md".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
         match result {
-            RuleResult::Pass { detail } => {
-                assert!(detail.contains("exists"));
-            }
+            RuleResult::Pass { detail } => assert!(detail.contains("exists")),
             other => panic!("expected Pass, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn file_exists_exact_match_matches() {
+    async fn must_equal_matches_passes() {
         let provider = TestProvider::new().with_file("LICENSE", "MIT License");
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: "LICENSE".to_string(),
-            content: Some("MIT License".to_string()),
-            mode: EnsureFileMode::ExactMatch,
+            path: Some("LICENSE".to_string()),
+            must_equal: Some("MIT License".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
-        match result {
-            RuleResult::Pass { detail } => {
-                assert!(detail.contains("expected content"));
-            }
-            other => panic!("expected Pass, got {other:?}"),
-        }
+        assert!(matches!(result, RuleResult::Pass { .. }), "got {result:?}");
     }
 
     #[tokio::test]
-    async fn file_exists_exact_match_differs() {
+    async fn must_equal_differs_remediates() {
         let provider = TestProvider::new().with_file("LICENSE", "Apache 2.0");
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: "LICENSE".to_string(),
-            content: Some("MIT License".to_string()),
-            mode: EnsureFileMode::ExactMatch,
+            path: Some("LICENSE".to_string()),
+            must_equal: Some("MIT License".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
         match result {
             RuleResult::Fail {
@@ -377,8 +416,7 @@ mod tests {
                 remediation,
             } => {
                 assert!(detail.contains("does not match"));
-                let rem = remediation.unwrap();
-                match rem {
+                match remediation.unwrap() {
                     Remediation::FileChanges { changes, .. } => {
                         assert_eq!(changes.len(), 1);
                         assert_eq!(changes[0].content.as_deref(), Some("MIT License"));
@@ -391,44 +429,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_exists_contains_present() {
+    async fn must_contain_present_passes() {
         let provider = TestProvider::new().with_file(".gitignore", "target/\nnode_modules/\n");
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: ".gitignore".to_string(),
-            content: Some("target/".to_string()),
-            mode: EnsureFileMode::Contains,
+            path: Some(".gitignore".to_string()),
+            must_contain: Some("target/".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
         match result {
-            RuleResult::Pass { detail } => {
-                assert!(detail.contains("contains expected"));
-            }
+            RuleResult::Pass { detail } => assert!(detail.contains("contains required")),
             other => panic!("expected Pass, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn file_exists_contains_absent() {
+    async fn must_contain_absent_fails_without_remediation() {
         let provider = TestProvider::new().with_file(".gitignore", "node_modules/\n");
-        let repo = test_repo();
         let rule = EnsureFileRule::new(EnsureFileConfig {
-            path: ".gitignore".to_string(),
-            content: Some("target/".to_string()),
-            mode: EnsureFileMode::Contains,
+            path: Some(".gitignore".to_string()),
+            must_contain: Some("target/".to_string()),
+            ..cfg()
         });
 
-        let ctx = RuleContext {
-            provider: &provider,
-            repo: &repo,
-        };
-        let result = rule.evaluate(&ctx).await.unwrap();
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
 
         match result {
             RuleResult::Fail {
@@ -437,6 +475,125 @@ mod tests {
             } => {
                 assert!(detail.contains("does not contain"));
                 assert!(remediation.is_none());
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn must_match_regex() {
+        let provider = TestProvider::new().with_file("CODEOWNERS", "/infra/ @waratek/ops\n");
+        let rule = EnsureFileRule::new(EnsureFileConfig {
+            path: Some("CODEOWNERS".to_string()),
+            must_match: Some(r"@waratek/ops\b".to_string()),
+            ..cfg()
+        });
+
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(result, RuleResult::Pass { .. }), "got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn multi_path_passes_when_present_in_alt_location() {
+        // File lives in .github/, not the repo root — should still pass.
+        let provider = TestProvider::new().with_file(".github/CODEOWNERS", "* @team");
+        let rule = EnsureFileRule::new(EnsureFileConfig {
+            paths: vec![
+                "CODEOWNERS".to_string(),
+                ".github/CODEOWNERS".to_string(),
+                "docs/CODEOWNERS".to_string(),
+            ],
+            ..cfg()
+        });
+
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
+
+        match result {
+            RuleResult::Pass { detail } => {
+                assert!(detail.contains(".github/CODEOWNERS"), "got: {detail}");
+            }
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_path_contains_passes_when_any_candidate_matches() {
+        // CODEOWNERS lives in .github/ and mentions the team — must_contain
+        // should pass against the alternate location.
+        let provider =
+            TestProvider::new().with_file(".github/CODEOWNERS", "* @waratek/portal @waratek/ops\n");
+        let rule = EnsureFileRule::new(EnsureFileConfig {
+            paths: vec![
+                "CODEOWNERS".to_string(),
+                ".github/CODEOWNERS".to_string(),
+                "docs/CODEOWNERS".to_string(),
+            ],
+            default_content: Some("* @waratek/ops\n".to_string()),
+            must_contain: Some("@waratek/ops".to_string()),
+            ..cfg()
+        });
+
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(result, RuleResult::Pass { .. }), "got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn multi_path_missing_creates_canonical_from_default_content() {
+        let provider = TestProvider::new();
+        let rule = EnsureFileRule::new(EnsureFileConfig {
+            paths: vec![
+                "CODEOWNERS".to_string(),
+                ".github/CODEOWNERS".to_string(),
+                "docs/CODEOWNERS".to_string(),
+            ],
+            default_content: Some("* @waratek/ops\n".to_string()),
+            must_contain: Some("@waratek/ops".to_string()),
+            ..cfg()
+        });
+
+        let result = rule
+            .evaluate(&RuleContext {
+                provider: &provider,
+                repo: &test_repo(),
+            })
+            .await
+            .unwrap();
+
+        match result {
+            RuleResult::Fail {
+                detail,
+                remediation,
+            } => {
+                assert!(detail.contains("No file found at any of"), "got: {detail}");
+                match remediation.unwrap() {
+                    Remediation::FileChanges { changes, .. } => {
+                        assert_eq!(changes.len(), 1);
+                        // Created at the first (canonical) path, with a valid body.
+                        assert_eq!(changes[0].path, "CODEOWNERS");
+                        assert_eq!(changes[0].content.as_deref(), Some("* @waratek/ops\n"));
+                    }
+                    other => panic!("expected FileChanges remediation, got {other:?}"),
+                }
             }
             other => panic!("expected Fail, got {other:?}"),
         }

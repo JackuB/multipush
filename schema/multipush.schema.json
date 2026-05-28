@@ -154,32 +154,57 @@
     },
     "EnsureFileConfig": {
       "type": "object",
-      "required": [
-        "path"
-      ],
       "properties": {
-        "content": {
+        "default_content": {
+          "description": "Body to write when the file is missing. This only seeds creation — it is never enforced on existing files. When `must_equal` is set, that value governs creation instead and `default_content` must be omitted.",
+          "default": null,
           "type": [
             "string",
             "null"
           ]
         },
-        "mode": {
-          "$ref": "#/definitions/EnsureFileMode"
+        "must_contain": {
+          "description": "Predicate: an existing file must contain this substring.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "must_equal": {
+          "description": "Predicate: an existing file must equal this exactly; drift is overwritten as a remediation. Also used as the creation body for a missing file.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "must_match": {
+          "description": "Predicate: an existing file must match this regular expression.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "path": {
-          "type": "string"
+          "description": "Single file path to check. Complementary with `paths`; when `paths` is set it takes precedence.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paths": {
+          "description": "Candidate paths to check, in priority order (any-of semantics): the rule passes if a file exists at any of them. The first entry is the canonical location used when creating the file. Useful for files GitHub accepts in multiple locations, e.g. CODEOWNERS in the repo root, `.github/`, or `docs/`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
-    },
-    "EnsureFileMode": {
-      "type": "string",
-      "enum": [
-        "create_if_missing",
-        "exact_match",
-        "contains"
-      ]
     },
     "EnsureJsonKeyConfig": {
       "type": "object",

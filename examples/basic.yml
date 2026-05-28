@@ -26,10 +26,12 @@ policies:
       #   - "${GITHUB_ORG}/archived-*"
       # exclude_archived: true     # skip archived repos (default: true)
     rules:
-      - !ensure_file               # YAML tag selects the rule type
+      - !ensure_file                      # YAML tag selects the rule type
         path: README.md
-        # content: "# My Project"  # optional: expected content
-        # mode: create_if_missing  # create_if_missing | exact_match | contains
+        # default_content: "# My Project" # seed this body if the file is missing
+        # must_contain: "## Usage"        # predicate: existing file must contain this
+        # must_match: "^# .+"             # predicate: existing file must match this regex
+        # must_equal: "..."               # predicate: existing file must equal this exactly
 
   # Ensure every repo has a LICENSE file
   - name: require-license

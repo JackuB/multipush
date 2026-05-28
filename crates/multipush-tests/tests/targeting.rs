@@ -1,5 +1,5 @@
 use multipush_core::config::{
-    EnsureFileConfig, EnsureFileMode, FilterConfig, PolicyConfig, RuleDefinition, TargetConfig,
+    EnsureFileConfig, FilterConfig, PolicyConfig, RuleDefinition, TargetConfig,
 };
 use multipush_core::engine::evaluate;
 use multipush_core::model::{Severity, Visibility};
@@ -19,9 +19,12 @@ fn dummy_rule() -> RuleDefinition {
     // README always exists in every test repo so we focus the assertions on
     // which repos got evaluated, not whether the rule passed.
     RuleDefinition::EnsureFile(EnsureFileConfig {
-        path: "README.md".to_string(),
-        content: None,
-        mode: EnsureFileMode::CreateIfMissing,
+        path: Some("README.md".to_string()),
+        paths: vec![],
+        default_content: None,
+        must_contain: None,
+        must_match: None,
+        must_equal: None,
     })
 }
 

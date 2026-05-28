@@ -58,5 +58,5 @@ lookups:
 rules:
   - !ensure_file
     path: .gitignore
-    content: |
+    default_content: |
       {{ template }}

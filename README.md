@@ -190,24 +190,64 @@ Rules use YAML tags to specify their type. Each rule is prefixed with `!` in the
 
 | Rule | Tag | Description |
 |---|---|---|
-| ensure_file | `!ensure_file` | Ensure a file exists with optional content matching |
+| ensure_file | `!ensure_file` | Ensure a file exists (in any of several locations), optionally satisfying a content predicate |
 | ensure_json_key | `!ensure_json_key` | Ensure a key exists in a JSON file |
 | ensure_yaml_key | `!ensure_yaml_key` | Ensure a key exists in a YAML file |
 | file_matches | `!file_matches` | Check file content against a regex pattern |
 
 ### `!ensure_file`
 
-| Param | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `path` | string | Yes | — | File path to check |
-| `content` | string | No | — | Expected file content |
-| `mode` | `create_if_missing` \| `exact_match` \| `contains` | No | `create_if_missing` | How to check the file |
+`ensure_file` separates **where** the file may live, **what to create** when it
+is missing, and **what an existing file must satisfy**.
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `path` | string | One of `path`/`paths` | Single file path to check |
+| `paths` | list of strings | One of `path`/`paths` | Candidate paths, checked in priority order (any-of); first entry is the canonical creation location |
+| `default_content` | string | No | Body written when the file is **missing**. Only seeds creation — never enforced on existing files |
+| `must_contain` | string | No | Predicate: an existing file must contain this substring |
+| `must_match` | string (regex) | No | Predicate: an existing file must match this regular expression |
+| `must_equal` | string | No | Predicate: an existing file must equal this exactly (drift is overwritten); also used as the creation body |
+
+At most one predicate (`must_contain` / `must_match` / `must_equal`) may be set.
+With no predicate, the file only has to exist. `default_content` is redundant
+with `must_equal` (which governs creation itself), so setting both is rejected.
+
+```yaml
+# Simplest: the file just has to exist; create it from default_content if absent.
+- !ensure_file
+  path: CODEOWNERS
+  default_content: "* @platform-team\n"
+```
+
+**Multiple locations.** GitHub accepts some files (CODEOWNERS, LICENSE) in more
+than one place. List them in `paths`; the rule passes if the file exists at
+**any** of them, and creates the first entry when none exist.
 
 ```yaml
 - !ensure_file
-  path: CODEOWNERS
-  content: "* @platform-team\n"
-  mode: create_if_missing
+  paths:
+    - CODEOWNERS
+    - .github/CODEOWNERS
+    - docs/CODEOWNERS
+  default_content: "* @platform-team\n"
+```
+
+**Content predicate plus a valid created file.** Because the check
+(`must_contain`) and the creation body (`default_content`) are separate fields,
+you can require a marker *and* still create a complete, valid file when the file
+is absent. An existing file that fails the predicate is reported with no
+auto-fix (multipush won't rewrite a hand-authored file).
+
+```yaml
+# Infra repos must list @acme/ops as an owner.
+- !ensure_file
+  paths:
+    - CODEOWNERS
+    - .github/CODEOWNERS
+    - docs/CODEOWNERS
+  default_content: "* @acme/ops\n"   # created when the file is missing
+  must_contain: "@acme/ops"           # existing files must mention ops somewhere
 ```
 
 ### `!ensure_json_key`

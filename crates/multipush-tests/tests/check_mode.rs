@@ -1,6 +1,4 @@
-use multipush_core::config::{
-    EnsureFileConfig, EnsureFileMode, PolicyConfig, RuleDefinition, TargetConfig,
-};
+use multipush_core::config::{EnsureFileConfig, PolicyConfig, RuleDefinition, TargetConfig};
 use multipush_core::engine::evaluate;
 use multipush_core::model::Severity;
 use multipush_core::rule::Rule;
@@ -31,9 +29,12 @@ async fn check_mode_basic() {
             filters: vec![],
         },
         rules: vec![RuleDefinition::EnsureFile(EnsureFileConfig {
-            path: "README.md".to_string(),
-            content: None,
-            mode: EnsureFileMode::CreateIfMissing,
+            path: Some("README.md".to_string()),
+            paths: vec![],
+            default_content: None,
+            must_contain: None,
+            must_match: None,
+            must_equal: None,
         })],
     }]);
 
@@ -67,9 +68,12 @@ async fn check_mode_targeting() {
             filters: vec![],
         },
         rules: vec![RuleDefinition::EnsureFile(EnsureFileConfig {
-            path: "README.md".to_string(),
-            content: None,
-            mode: EnsureFileMode::CreateIfMissing,
+            path: Some("README.md".to_string()),
+            paths: vec![],
+            default_content: None,
+            must_contain: None,
+            must_match: None,
+            must_equal: None,
         })],
     }]);
 
@@ -99,14 +103,20 @@ async fn check_mode_multiple_rules() {
         },
         rules: vec![
             RuleDefinition::EnsureFile(EnsureFileConfig {
-                path: "README.md".to_string(),
-                content: None,
-                mode: EnsureFileMode::CreateIfMissing,
+                path: Some("README.md".to_string()),
+                paths: vec![],
+                default_content: None,
+                must_contain: None,
+                must_match: None,
+                must_equal: None,
             }),
             RuleDefinition::EnsureFile(EnsureFileConfig {
-                path: "LICENSE".to_string(),
-                content: None,
-                mode: EnsureFileMode::CreateIfMissing,
+                path: Some("LICENSE".to_string()),
+                paths: vec![],
+                default_content: None,
+                must_contain: None,
+                must_match: None,
+                must_equal: None,
             }),
         ],
     }]);

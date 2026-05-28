@@ -8,7 +8,7 @@ params:
 rules:
   - !ensure_file
     path: SECURITY.md
-    content: |
+    default_content: |
       # Security Policy
 
       ## Reporting a Vulnerability

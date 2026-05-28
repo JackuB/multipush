@@ -9,8 +9,8 @@ pub use loader::{load_config, ConfigSource};
 pub use policy::{FilterConfig, PolicyConfig, TargetConfig};
 pub use provider::{ProviderConfig, ProviderType};
 pub use rules::{
-    BranchProtectionConfig, EnsureFileConfig, EnsureFileMode, EnsureJsonKeyConfig,
-    EnsureYamlKeyConfig, FileAbsentConfig, FileMatchesConfig, JsonKeyMode, RepoSettingsConfig,
+    BranchProtectionConfig, EnsureFileConfig, EnsureJsonKeyConfig, EnsureYamlKeyConfig,
+    FileAbsentConfig, FileMatchesConfig, JsonKeyMode, RepoSettingsConfig,
     RequiredPullRequestReviewsConfig, RequiredStatusChecksConfig, RuleDefinition,
 };
 
