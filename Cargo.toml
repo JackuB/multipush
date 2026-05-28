@@ -64,3 +64,8 @@ multipush-provider-github = { path = "crates/multipush-provider-github" }
 multipush-rules = { path = "crates/multipush-rules" }
 multipush-formatters = { path = "crates/multipush-formatters" }
 multipush-cli = { path = "crates/multipush-cli" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

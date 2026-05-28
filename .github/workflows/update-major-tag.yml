@@ -1,0 +1,49 @@
+name: Update major version tag
+
+# When a Release is published, force-move the major and minor version tags
+# (e.g. `v1`, `v1.2`) to point at the release commit, so consumers pinning
+# `uses: JackuB/multipush@v1` automatically pick up new releases.
+#
+# Skipped for prereleases — pre-1.0 alphas/betas should not promote.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Move major and minor tags
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          # Tag formats accepted: v0.1.0, v1.2.3, v1.2.3-foo. Reject anything
+          # that doesn't look like a semver version tag (e.g. release-2024).
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::notice::Tag '$TAG' is not a semver version tag; skipping."
+            exit 0
+          fi
+
+          v="${TAG#v}"
+          major="v${v%%.*}"
+          minor="${major}.$(echo "$v" | cut -d. -f2)"
+
+          echo "Release tag: $TAG"
+          echo "Moving $major → $TAG"
+          echo "Moving $minor → $TAG"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag -f "$major" "$TAG"
+          git tag -f "$minor" "$TAG"
+          git push -f origin "$major" "$minor"

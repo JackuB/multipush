@@ -3,6 +3,12 @@ name = "multipush-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Declarative policy-as-code for GitHub repository governance: define standards in YAML, audit compliance, and auto-open PRs to fix drift."
+repository = "https://github.com/JackuB/multipush"
+homepage = "https://github.com/JackuB/multipush"
+readme = "../../README.md"
+keywords = ["policy", "github", "governance", "automation", "compliance"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "multipush"

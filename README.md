@@ -41,8 +41,40 @@ Keep policies in a repo, review changes through PRs, and gate them behind `multi
 
 ### Install
 
+Pick the option that matches how you'll use multipush:
+
+**As a GitHub Action** — runs in CI, no host install needed. Best fit if your policies live in a repo and your audits are scheduled:
+
+```yaml
+- uses: JackuB/multipush@v0
+  with:
+    config: multipush.yml
+    token: ${{ secrets.MULTIPUSH_TOKEN }}
+```
+
+See [GitHub Actions](#github-actions) for the full input reference.
+
+**Shell installer** (Linux, macOS, WSL):
+
 ```sh
-cargo install multipush-cli
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/JackuB/multipush/releases/latest/download/multipush-cli-installer.sh | sh
+```
+
+**PowerShell installer** (Windows):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/JackuB/multipush/releases/latest/download/multipush-cli-installer.ps1 | iex"
+```
+
+**Prebuilt binaries**: download the archive for your platform from [Releases](https://github.com/JackuB/multipush/releases) and put `multipush` on your `PATH`. Builds are available for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`.
+
+**From source** (requires a Rust toolchain):
+
+```sh
+git clone https://github.com/JackuB/multipush
+cd multipush
+cargo install --path crates/multipush-cli
 ```
 
 ### Create a config
@@ -415,6 +447,34 @@ Without `-c`, multipush looks for config automatically:
 
 ## GitHub Actions
 
+The published action wraps the CLI so workflows don't have to install it. It works on `ubuntu-*`, `macos-*`, and `windows-*` runners.
+
+### Recommended pattern: a central policy repo
+
+The cleanest deployment is a single repo dedicated to org-wide policy — call it `policies`, `cml`, `repo-governance`, whatever. It holds the YAML configs and the workflows that run multipush. It contains no product code; its only job is to declare standards and audit/remediate every other repo against them.
+
+```
+policies/
+├── configs/
+│   ├── codeowners.yml
+│   ├── licensing.yml
+│   └── security-md.yml
+└── .github/workflows/
+    ├── check.yml      # scheduled audit + PR validation of policy changes
+    └── apply.yml      # workflow_dispatch remediation
+```
+
+Why this works in practice:
+
+- **Policy changes go through PR review in one place.** `check` runs on the PR against live org repos, so a malformed or overly broad policy never lands on `main`.
+- **Apply is one button, scoped to one team.** Only people with write access to the policy repo can dispatch remediation; the rest of the org just sees the resulting PRs.
+- **The audit history lives somewhere.** Run summaries on `check` form a compliance trail you can point auditors at.
+- **No install anywhere.** The action pulls the binary into the runner per-run; nothing to maintain on dev machines or build images.
+
+The examples below assume this layout.
+
+### Minimal check
+
 ```yaml
 name: Policy Check
 on:
@@ -430,22 +490,87 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: JackuB/multipush@v0
+        with:
+          config: multipush.yml
+          token: ${{ secrets.MULTIPUSH_TOKEN }}
+```
 
-      - name: Install multipush
-        run: cargo install multipush-cli
+### Action inputs
 
-      - name: Check policies
-        env:
-          GITHUB_TOKEN: ${{ secrets.MULTIPUSH_TOKEN }}
-          GITHUB_ORG: my-org
-        run: multipush check -c multipush.yml
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `config` | yes | — | Path to a multipush config file or directory (passed as `-c`) |
+| `command` | no | `check` | Subcommand: `check`, `apply`, `validate`, `list-repos`, `list-rules` |
+| `args` | no | `""` | Extra arguments appended to the command (e.g. `--dry-run --max-prs 5`) |
+| `token` | no | `${{ github.token }}` | Token used by multipush. Override for org-wide access |
+| `version` | no | `latest` | multipush release to install (e.g. `0.1.0`) |
 
-      - name: Apply remediations
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GITHUB_TOKEN: ${{ secrets.MULTIPUSH_TOKEN }}
-          GITHUB_ORG: my-org
-        run: multipush apply -c multipush.yml
+### Version pinning
+
+Three pin styles, in increasing strictness:
+
+- **`@v0`** (major) — moves on every non-prerelease publish. Accepts new features and fixes, but breaking changes between minors of `0.x` will propagate. Lowest-maintenance, highest risk during the `0.x` series.
+- **`@v0.1`** (minor) — moves on patches within `0.1.x`. Safe target for production policy repos that don't want minor-version churn.
+- **`@v0.1.0`** (exact) — immutable. Reproducible, zero surprises, but you opt in to every update by hand.
+
+The major and minor tags are force-updated automatically by `update-major-tag.yml` whenever a non-prerelease GitHub Release is published. You don't need to maintain them yourself.
+
+### Token scope
+
+The action defaults `token:` to the workflow's `GITHUB_TOKEN`, which is **scoped to the current repo only**. To audit or fix repos across an org, override `token:` with a Personal Access Token or GitHub App installation token that has:
+
+- `repo` (or fine-grained: Contents read/write, Pull requests write, Administration read for branch protection)
+- `read:org`
+
+Store it as `secrets.MULTIPUSH_TOKEN` (or any name) and reference it via the `token:` input.
+
+### Apply on demand
+
+A `workflow_dispatch` job that defaults to dry-run and lets you flip a switch to actually open PRs:
+
+```yaml
+name: multipush apply
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview without opening PRs
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: JackuB/multipush@v0
+        with:
+          config: multipush.yml
+          command: apply
+          args: ${{ inputs.dry_run && '--dry-run' || '--max-prs 5' }}
+          token: ${{ secrets.MULTIPUSH_TOKEN }}
+```
+
+### Calling the binary directly
+
+If you need to pipe output, set non-default env, or use a flag the action doesn't surface, install the binary yourself:
+
+```yaml
+- name: Install multipush
+  run: |
+    curl --proto '=https' --tlsv1.2 -LsSf \
+      https://github.com/JackuB/multipush/releases/latest/download/multipush-cli-installer.sh | sh
+    echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+- name: Run multipush
+  env:
+    GITHUB_TOKEN: ${{ secrets.MULTIPUSH_TOKEN }}
+  run: |
+    multipush check -c multipush.yml -f markdown > report.md
 ```
 
 ## License

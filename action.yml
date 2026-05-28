@@ -1,0 +1,53 @@
+name: multipush
+description: Declarative policy-as-code for GitHub repository governance — audit compliance and open PRs to fix drift.
+author: Jakub Mikulas
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  config:
+    description: Path to a multipush config file or directory (passed as `-c`).
+    required: true
+  command:
+    description: Subcommand to run — check, apply, validate, list-repos, list-rules.
+    required: false
+    default: check
+  args:
+    description: Extra arguments appended to the command (e.g. "--dry-run --max-prs 5").
+    required: false
+    default: ""
+  token:
+    description: GitHub token used by multipush. Defaults to the workflow's GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: multipush version to install (e.g. "0.1.0"). Defaults to the latest release.
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Install multipush
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ "$VERSION" = "latest" ]; then
+          url="https://github.com/JackuB/multipush/releases/latest/download/multipush-cli-installer.sh"
+        else
+          v="${VERSION#v}"
+          url="https://github.com/JackuB/multipush/releases/download/v${v}/multipush-cli-installer.sh"
+        fi
+        curl --proto '=https' --tlsv1.2 -LsSf "$url" | sh
+        # dist installs to $CARGO_HOME/bin (default $HOME/.cargo/bin); make it available downstream
+        echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+    - name: Run multipush
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        multipush ${{ inputs.command }} -c "${{ inputs.config }}" ${{ inputs.args }}
