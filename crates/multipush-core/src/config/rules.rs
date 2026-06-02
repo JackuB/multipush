@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
@@ -76,13 +78,29 @@ impl EnsureFileConfig {
         }
     }
 
-    /// The content to write when creating a missing file: `must_equal` if set
-    /// (it is authoritative), otherwise `default_content`. `None` means the file
-    /// is required to exist but the rule does not know what to put in it.
-    pub fn creation_body(&self) -> Option<&str> {
-        self.must_equal
-            .as_deref()
-            .or(self.default_content.as_deref())
+    /// The content to write when creating a missing file. `None` means the
+    /// file is required to exist but the rule does not know what to put in it.
+    ///
+    /// Source precedence:
+    /// - `must_equal` is authoritative — returned verbatim. Mutating it would
+    ///   break the equality predicate (`exists && content == must_equal`),
+    ///   causing an infinite create/overwrite loop on subsequent runs.
+    /// - `default_content` is normalized to end with exactly one `\n`. Two
+    ///   reasons this matters:
+    ///   1. Recipe template substitution inlines a user-supplied `\n` into
+    ///      the YAML source as a raw newline. Inside a double-quoted YAML
+    ///      string, YAML folds that into a space, so `"* @team\n"` becomes
+    ///      `"* @team "` after roundtrip. Trimming + appending fixes that.
+    ///   2. Humans often forget the trailing newline in YAML; text files
+    ///      should always have one (POSIX convention, git happiness).
+    pub fn creation_body(&self) -> Option<Cow<'_, str>> {
+        if let Some(eq) = self.must_equal.as_deref() {
+            return Some(Cow::Borrowed(eq));
+        }
+        self.default_content.as_deref().map(|s| {
+            let trimmed = s.trim_end_matches(['\n', '\r', ' ', '\t']);
+            Cow::Owned(format!("{trimmed}\n"))
+        })
     }
 }
 
@@ -223,5 +241,65 @@ must_contain: "@team"
         let cfg: EnsureFileConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(cfg.default_content.as_deref(), Some("* @team\n"));
         assert_eq!(cfg.must_contain.as_deref(), Some("@team"));
+    }
+
+    #[test]
+    fn creation_body_appends_newline_when_missing() {
+        let cfg = EnsureFileConfig {
+            path: Some("CODEOWNERS".into()),
+            paths: vec![],
+            default_content: Some("* @team".to_string()),
+            must_contain: None,
+            must_match: None,
+            must_equal: None,
+        };
+        assert_eq!(cfg.creation_body().as_deref(), Some("* @team\n"));
+    }
+
+    #[test]
+    fn creation_body_collapses_trailing_whitespace_to_single_newline() {
+        // Recipe substitution can fold the user's literal newline into a
+        // space inside a double-quoted YAML string ("* @team\n" → "* @team ").
+        // Also covers double-newlines and mixed trailing whitespace.
+        let cases = [
+            ("* @team ", "* @team\n"),
+            ("* @team\n", "* @team\n"),
+            ("* @team\n\n", "* @team\n"),
+            ("* @team \t\n", "* @team\n"),
+        ];
+        for (input, expected) in cases {
+            let cfg = EnsureFileConfig {
+                path: Some("CODEOWNERS".into()),
+                paths: vec![],
+                default_content: Some(input.to_string()),
+                must_contain: None,
+                must_match: None,
+                must_equal: None,
+            };
+            assert_eq!(
+                cfg.creation_body().as_deref(),
+                Some(expected),
+                "input was {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn creation_body_uses_must_equal_verbatim() {
+        // `must_equal` participates in the equality predicate; mutating the
+        // creation body would cause subsequent runs to detect drift and
+        // overwrite forever.
+        let cfg = EnsureFileConfig {
+            path: Some("foo".into()),
+            paths: vec![],
+            default_content: None,
+            must_contain: None,
+            must_match: None,
+            must_equal: Some("exactly this, no trailing newline".to_string()),
+        };
+        assert_eq!(
+            cfg.creation_body().as_deref(),
+            Some("exactly this, no trailing newline")
+        );
     }
 }

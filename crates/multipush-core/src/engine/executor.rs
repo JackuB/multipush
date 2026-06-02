@@ -302,7 +302,6 @@ pub async fn execute(
                 policy_name,
                 policy_report.description.as_deref(),
                 &policy_report.severity,
-                &repo.full_name,
                 remediations,
                 policy_source,
             );
@@ -543,7 +542,6 @@ fn generate_pr_body(
     policy_name: &str,
     description: Option<&str>,
     severity: &crate::model::Severity,
-    repo_name: &str,
     remediations: &[AttributedRemediation],
     policy_source: &PolicySourceInfo,
 ) -> String {
@@ -555,8 +553,7 @@ fn generate_pr_body(
         body.push_str(&format!("{desc}\n\n"));
     }
 
-    body.push_str(&format!("**Severity:** {severity}\n"));
-    body.push_str(&format!("**Repository:** {repo_name}\n\n"));
+    body.push_str(&format!("**Severity:** {severity}\n\n"));
 
     body.push_str("### Changes\n\n");
     for r in remediations {
@@ -891,7 +888,6 @@ mod tests {
             "require-license",
             Some("All repos need a license"),
             &Severity::Error,
-            "org/alpha",
             &remediations,
             &PolicySourceInfo::default(),
         );
@@ -899,7 +895,9 @@ mod tests {
         assert!(body.contains("## Policy: require-license"));
         assert!(body.contains("All repos need a license"));
         assert!(body.contains("**Severity:** error"));
-        assert!(body.contains("**Repository:** org/alpha"));
+        // The PR is opened against the target repo, so the GitHub UI already
+        // displays the repo name — we deliberately don't repeat it in the body.
+        assert!(!body.contains("**Repository:**"));
         assert!(body.contains("Create LICENSE file"));
         // rule_type is surfaced alongside the description.
         assert!(body.contains("(rule: `ensure_file`)"));
@@ -934,7 +932,6 @@ mod tests {
             "codeowners-portal",
             Some("Portal team's repos"),
             &Severity::Error,
-            "waratek/portal",
             &remediations,
             &policy_source,
         );

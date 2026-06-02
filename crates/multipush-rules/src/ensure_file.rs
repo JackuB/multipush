@@ -350,7 +350,9 @@ mod tests {
                 Remediation::FileChanges { changes, .. } => {
                     assert_eq!(changes.len(), 1);
                     assert_eq!(changes[0].path, "LICENSE");
-                    assert_eq!(changes[0].content.as_deref(), Some("MIT License"));
+                    // creation_body() appends a trailing newline so authors
+                    // don't have to remember it in every config / recipe param.
+                    assert_eq!(changes[0].content.as_deref(), Some("MIT License\n"));
                 }
                 other => panic!("expected FileChanges remediation, got {other:?}"),
             },
