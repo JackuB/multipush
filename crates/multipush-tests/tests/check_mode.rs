@@ -23,7 +23,7 @@ async fn check_mode_basic() {
         description: None,
         severity: Severity::Error,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],
@@ -62,7 +62,7 @@ async fn check_mode_targeting() {
         description: None,
         severity: Severity::Error,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec!["org/excluded-*".to_string()],
             exclude_archived: true,
             filters: vec![],
@@ -96,7 +96,7 @@ async fn check_mode_multiple_rules() {
         description: None,
         severity: Severity::Error,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],

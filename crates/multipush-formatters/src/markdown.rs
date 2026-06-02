@@ -3,8 +3,8 @@ use std::fmt::Write;
 use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
     build_pr_action_map, format_branch_protection_summary, format_pr_summary,
-    format_settings_summary, has_branch_protection_actions, has_settings_actions, Formatter,
-    PolicyReport, RepoOutcome, Report,
+    format_settings_summary, group_by_repo, has_branch_protection_actions, has_settings_actions,
+    Formatter, PolicyCounts, PolicyReport, RepoCounts, RepoOutcome, Report,
 };
 
 pub struct MarkdownFormatter;
@@ -60,8 +60,89 @@ impl MarkdownFormatter {
             .unwrap();
         }
 
+        writeln!(out).unwrap();
+        writeln!(
+            out,
+            "**Policy summary:** {}",
+            format_counts_line(&PolicyCounts::from_policy(policy)),
+        )
+        .unwrap();
+
         out
     }
+}
+
+/// Same shape as the table formatter's helper; only non-zero kinds are listed.
+fn format_repo_counts(counts: &RepoCounts) -> String {
+    let mut parts = Vec::new();
+    if counts.passing > 0 {
+        parts.push(format!("{} pass", counts.passing));
+    }
+    if counts.failing > 0 {
+        parts.push(format!("{} fail", counts.failing));
+    }
+    if counts.skipped > 0 {
+        parts.push(format!("{} skip", counts.skipped));
+    }
+    if counts.errors > 0 {
+        parts.push(format!(
+            "{} {}",
+            counts.errors,
+            if counts.errors == 1 {
+                "error"
+            } else {
+                "errors"
+            },
+        ));
+    }
+    if parts.is_empty() {
+        "no evaluations".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn format_counts_line(counts: &PolicyCounts) -> String {
+    let mut s = format!(
+        "{} pass, {} fail, {} skip, {} {}",
+        counts.passing,
+        counts.failing,
+        counts.skipped,
+        counts.errors,
+        if counts.errors == 1 {
+            "error"
+        } else {
+            "errors"
+        },
+    );
+    if let Some(rate) = counts.success_rate() {
+        write!(s, " ({rate:.1}% pass)").unwrap();
+    }
+    s
+}
+
+fn format_overview(report: &Report) -> String {
+    let s = &report.summary;
+    let policies = report.results.len();
+    let mut out = String::from("## Overview\n\n");
+    writeln!(out, "- Policies: {policies}").unwrap();
+    writeln!(out, "- Repositories: {}", s.total_repos).unwrap();
+    writeln!(out, "- Pass: {}", s.passing).unwrap();
+    writeln!(out, "- Fail: {}", s.failing).unwrap();
+    writeln!(out, "- Skip: {}", s.skipped).unwrap();
+    writeln!(out, "- Error: {}", s.errors).unwrap();
+    match s.success_rate() {
+        Some(rate) => writeln!(
+            out,
+            "- **Success rate:** {:.1}% ({} pass / {} evaluated)",
+            rate,
+            s.passing,
+            s.evaluated(),
+        )
+        .unwrap(),
+        None => writeln!(out, "- **Success rate:** n/a (no repositories evaluated)").unwrap(),
+    }
+    out
 }
 
 impl Default for MarkdownFormatter {
@@ -83,14 +164,44 @@ impl Formatter for MarkdownFormatter {
             out.push('\n');
         }
 
-        let s = &report.summary;
-        write!(
-            out,
-            "**Summary:** {} pass, {} fail, {} skip, {} errors",
-            s.passing, s.failing, s.skipped, s.errors,
-        )
-        .unwrap();
+        out.push_str(&format_overview(report));
 
+        Ok(out)
+    }
+
+    fn format_by_repo(&self, report: &Report) -> multipush_core::Result<String> {
+        let mut out = String::from("# multipush Report (by repo)\n\n");
+        let grouped = group_by_repo(report);
+
+        for (repo, results) in &grouped {
+            let counts = RepoCounts::from_results(results);
+            writeln!(
+                out,
+                "### {repo} — {} {} ({})",
+                counts.total(),
+                if counts.total() == 1 {
+                    "policy"
+                } else {
+                    "policies"
+                },
+                format_repo_counts(&counts),
+            )
+            .unwrap();
+            writeln!(out).unwrap();
+
+            for (policy_name, rr) in results {
+                writeln!(
+                    out,
+                    "- {} **{policy_name}** — {}",
+                    Self::status_label(&rr.outcome),
+                    Self::detail(&rr.outcome),
+                )
+                .unwrap();
+            }
+            writeln!(out).unwrap();
+        }
+
+        out.push_str(&format_overview(report));
         Ok(out)
     }
 
@@ -133,6 +244,14 @@ impl Formatter for MarkdownFormatter {
                 )
                 .unwrap();
             }
+
+            writeln!(out).unwrap();
+            writeln!(
+                out,
+                "**Policy summary:** {}",
+                format_counts_line(&PolicyCounts::from_policy(policy)),
+            )
+            .unwrap();
 
             out.push('\n');
         }
@@ -207,16 +326,12 @@ impl Formatter for MarkdownFormatter {
             out.push('\n');
         }
 
-        let s = &report.summary;
+        out.push_str(&format_overview(&apply_report.report));
+        writeln!(out, "- PRs: {}", format_pr_summary(apply_report)).unwrap();
+        writeln!(out, "- Settings: {}", format_settings_summary(apply_report)).unwrap();
         write!(
             out,
-            "**Summary:** {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {} | Branch protection: {}",
-            s.passing,
-            s.failing,
-            s.skipped,
-            s.errors,
-            format_pr_summary(apply_report),
-            format_settings_summary(apply_report),
+            "- Branch protection: {}",
             format_branch_protection_summary(apply_report),
         )
         .unwrap();
@@ -267,6 +382,20 @@ mod tests {
     }
 
     #[test]
+    fn markdown_format_by_repo() {
+        let report = make_check_report();
+        let formatter = MarkdownFormatter::new();
+        let output = formatter.format_by_repo(&report).unwrap();
+
+        assert!(output.starts_with("# multipush Report (by repo)"));
+        assert!(output.contains("### acme/api-gateway — 1 policy (1 pass)"));
+        assert!(output.contains("### acme/web-frontend — 1 policy (1 fail)"));
+        assert!(output.contains("- PASS **codeowners-required** — File CODEOWNERS exists"));
+        assert!(output.contains("- FAIL **codeowners-required** — File CODEOWNERS does not exist"));
+        assert!(output.contains("## Overview"));
+    }
+
+    #[test]
     fn markdown_format_check_mode() {
         let report = make_check_report();
         let formatter = MarkdownFormatter::new();
@@ -277,7 +406,13 @@ mod tests {
         assert!(output.contains("> All repos must have a CODEOWNERS file"));
         assert!(output.contains("| acme/api-gateway | PASS | File CODEOWNERS exists |"));
         assert!(output.contains("| acme/web-frontend | FAIL | File CODEOWNERS does not exist |"));
-        assert!(output.contains("**Summary:** 1 pass, 1 fail, 0 skip, 0 errors"));
+        assert!(
+            output.contains("**Policy summary:** 1 pass, 1 fail, 0 skip, 0 errors (50.0% pass)")
+        );
+        assert!(output.contains("## Overview"));
+        assert!(output.contains("- Policies: 1"));
+        assert!(output.contains("- Repositories: 2"));
+        assert!(output.contains("- **Success rate:** 50.0% (1 pass / 2 evaluated)"));
     }
 
     #[test]

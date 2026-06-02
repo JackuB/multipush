@@ -55,7 +55,7 @@ wiremock = "0.6"
 tempfile = "3"
 
 # Output formatting
-tabled = "0.17"
+tabled = { version = "0.17", features = ["ansi"] }
 owo-colors = "4"
 
 # Internal crates

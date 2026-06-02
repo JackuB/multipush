@@ -34,7 +34,7 @@ fn policy_with_filters(filters: Vec<FilterConfig>) -> PolicyConfig {
         description: None,
         severity: Severity::Error,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters,

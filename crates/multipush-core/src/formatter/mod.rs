@@ -61,6 +61,64 @@ pub struct Summary {
     pub errors: usize,
 }
 
+impl Summary {
+    /// Repos where a pass/fail verdict was actually reached (excludes skipped and errored).
+    pub fn evaluated(&self) -> usize {
+        self.passing + self.failing
+    }
+
+    /// Pass rate as `pass / (pass + fail)` in percent. `None` when nothing was evaluated.
+    pub fn success_rate(&self) -> Option<f64> {
+        let denom = self.evaluated();
+        if denom == 0 {
+            None
+        } else {
+            Some((self.passing as f64 / denom as f64) * 100.0)
+        }
+    }
+}
+
+/// Per-policy counts for the per-policy summary footer.
+#[derive(Debug, Clone, Default)]
+pub struct PolicyCounts {
+    pub passing: usize,
+    pub failing: usize,
+    pub skipped: usize,
+    pub errors: usize,
+}
+
+impl PolicyCounts {
+    pub fn from_policy(policy: &PolicyReport) -> Self {
+        let mut c = Self::default();
+        for rr in &policy.repo_results {
+            match &rr.outcome {
+                RepoOutcome::Pass { .. } => c.passing += 1,
+                RepoOutcome::Fail { .. } => c.failing += 1,
+                RepoOutcome::Skip { .. } => c.skipped += 1,
+                RepoOutcome::Error { .. } => c.errors += 1,
+            }
+        }
+        c
+    }
+
+    pub fn total(&self) -> usize {
+        self.passing + self.failing + self.skipped + self.errors
+    }
+
+    pub fn evaluated(&self) -> usize {
+        self.passing + self.failing
+    }
+
+    pub fn success_rate(&self) -> Option<f64> {
+        let denom = self.evaluated();
+        if denom == 0 {
+            None
+        } else {
+            Some((self.passing as f64 / denom as f64) * 100.0)
+        }
+    }
+}
+
 /// Build a lookup from (repo_name, policy_name) to (action_label, pr_url) for apply reports.
 pub fn build_pr_action_map(
     report: &ApplyReport,
@@ -234,13 +292,68 @@ pub trait Formatter: Send + Sync {
     /// Formatter identifier (e.g. `"table"`, `"json"`, `"markdown"`).
     fn name(&self) -> &str;
 
-    /// Format a check-mode report.
+    /// Format a check-mode report, grouped by policy (default view).
     fn format(&self, report: &Report) -> Result<String>;
+
+    /// Format a check-mode report, grouped by repository.
+    ///
+    /// Default implementation falls back to [`Formatter::format`]; formatters
+    /// that have a meaningful per-repo presentation should override this.
+    fn format_by_repo(&self, report: &Report) -> Result<String> {
+        self.format(report)
+    }
 
     /// Format an apply report. Default implementation delegates to `format()` with a PR summary.
     fn format_apply(&self, apply_report: &ApplyReport) -> Result<String> {
         let mut out = self.format(&apply_report.report)?;
         write!(out, "\nPRs: {}", format_pr_summary(apply_report)).unwrap();
         Ok(out)
+    }
+}
+
+/// Group a report's per-policy results into `repo_name -> [(policy_name, &RepoResult)]`.
+///
+/// Repositories appear in sorted order; within each repo, policy results are
+/// in the order the policies were declared in the config.
+pub fn group_by_repo(
+    report: &Report,
+) -> std::collections::BTreeMap<&str, Vec<(&str, &RepoResult)>> {
+    let mut map: std::collections::BTreeMap<&str, Vec<(&str, &RepoResult)>> =
+        std::collections::BTreeMap::new();
+    for policy in &report.results {
+        for rr in &policy.repo_results {
+            map.entry(rr.repo_name.as_str())
+                .or_default()
+                .push((policy.policy_name.as_str(), rr));
+        }
+    }
+    map
+}
+
+/// Per-repository tally across all policies the repo was evaluated under.
+#[derive(Debug, Clone, Default)]
+pub struct RepoCounts {
+    pub passing: usize,
+    pub failing: usize,
+    pub skipped: usize,
+    pub errors: usize,
+}
+
+impl RepoCounts {
+    pub fn from_results(results: &[(&str, &RepoResult)]) -> Self {
+        let mut c = Self::default();
+        for (_, rr) in results {
+            match &rr.outcome {
+                RepoOutcome::Pass { .. } => c.passing += 1,
+                RepoOutcome::Fail { .. } => c.failing += 1,
+                RepoOutcome::Skip { .. } => c.skipped += 1,
+                RepoOutcome::Error { .. } => c.errors += 1,
+            }
+        }
+        c
+    }
+
+    pub fn total(&self) -> usize {
+        self.passing + self.failing + self.skipped + self.errors
     }
 }

@@ -6,8 +6,8 @@ use tabled::{Table, Tabled};
 use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
     build_pr_action_map, format_branch_protection_summary, format_pr_summary,
-    format_settings_summary, has_branch_protection_actions, has_settings_actions, Formatter,
-    PolicyReport, RepoOutcome, Report,
+    format_settings_summary, group_by_repo, has_branch_protection_actions, has_settings_actions,
+    Formatter, PolicyCounts, PolicyReport, RepoCounts, RepoOutcome, Report,
 };
 
 #[derive(Tabled)]
@@ -100,6 +100,28 @@ impl TableFormatter {
         }
     }
 
+    /// Short single-character glyph for compact list views.
+    fn format_glyph(&self, outcome: &RepoOutcome) -> String {
+        let g = match outcome {
+            RepoOutcome::Pass { .. } => "✓",
+            RepoOutcome::Fail { .. } => "✗",
+            RepoOutcome::Skip { .. } => "•",
+            RepoOutcome::Error { .. } => "!",
+        };
+
+        if !self.color {
+            return g.to_string();
+        }
+
+        use owo_colors::OwoColorize;
+        match outcome {
+            RepoOutcome::Pass { .. } => g.green().to_string(),
+            RepoOutcome::Fail { .. } => g.red().to_string(),
+            RepoOutcome::Skip { .. } => g.yellow().to_string(),
+            RepoOutcome::Error { .. } => g.bold().red().to_string(),
+        }
+    }
+
     fn format_detail(outcome: &RepoOutcome) -> &str {
         match outcome {
             RepoOutcome::Pass { detail } => detail,
@@ -134,10 +156,92 @@ impl TableFormatter {
         } else {
             let table = Table::new(rows).with(Style::sharp()).to_string();
             writeln!(out, "{table}").unwrap();
+            writeln!(
+                out,
+                "Policy summary: {}",
+                format_counts_line(&PolicyCounts::from_policy(policy))
+            )
+            .unwrap();
         }
 
         out
     }
+}
+
+/// Compact counts summary used in the per-repo header. Only non-zero kinds
+/// are listed so a clean repo reads `(2 pass)` instead of `(2 pass, 0 fail, …)`.
+fn format_repo_counts(counts: &RepoCounts) -> String {
+    let mut parts = Vec::new();
+    if counts.passing > 0 {
+        parts.push(format!("{} pass", counts.passing));
+    }
+    if counts.failing > 0 {
+        parts.push(format!("{} fail", counts.failing));
+    }
+    if counts.skipped > 0 {
+        parts.push(format!("{} skip", counts.skipped));
+    }
+    if counts.errors > 0 {
+        parts.push(format!(
+            "{} {}",
+            counts.errors,
+            if counts.errors == 1 {
+                "error"
+            } else {
+                "errors"
+            },
+        ));
+    }
+    if parts.is_empty() {
+        "no evaluations".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn format_counts_line(counts: &PolicyCounts) -> String {
+    let mut s = format!(
+        "{} pass, {} fail, {} skip, {} {}",
+        counts.passing,
+        counts.failing,
+        counts.skipped,
+        counts.errors,
+        if counts.errors == 1 {
+            "error"
+        } else {
+            "errors"
+        },
+    );
+    if let Some(rate) = counts.success_rate() {
+        write!(s, " ({rate:.1}% pass)").unwrap();
+    }
+    s
+}
+
+fn format_overview(report: &Report) -> String {
+    let s = &report.summary;
+    let policies = report.results.len();
+    let mut out = String::new();
+    writeln!(out, "Overview").unwrap();
+    writeln!(out, "────────").unwrap();
+    writeln!(out, "Policies:     {policies}").unwrap();
+    writeln!(out, "Repositories: {}", s.total_repos).unwrap();
+    writeln!(out, "Pass:         {}", s.passing).unwrap();
+    writeln!(out, "Fail:         {}", s.failing).unwrap();
+    writeln!(out, "Skip:         {}", s.skipped).unwrap();
+    writeln!(out, "Error:        {}", s.errors).unwrap();
+    match s.success_rate() {
+        Some(rate) => write!(
+            out,
+            "Success rate: {:.1}%  ({} pass / {} evaluated)",
+            rate,
+            s.passing,
+            s.evaluated(),
+        )
+        .unwrap(),
+        None => write!(out, "Success rate: n/a  (no repositories evaluated)").unwrap(),
+    }
+    out
 }
 
 impl Formatter for TableFormatter {
@@ -155,13 +259,61 @@ impl Formatter for TableFormatter {
             out.push_str(&self.format_policy(policy));
         }
 
-        let s = &report.summary;
-        write!(
-            out,
-            "Summary: {} pass, {} fail, {} skip, {} errors",
-            s.passing, s.failing, s.skipped, s.errors
-        )
-        .unwrap();
+        if !report.results.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format_overview(report));
+
+        Ok(out)
+    }
+
+    fn format_by_repo(&self, report: &Report) -> multipush_core::Result<String> {
+        let mut out = String::new();
+        let grouped = group_by_repo(report);
+
+        for (i, (repo, results)) in grouped.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+
+            let counts = RepoCounts::from_results(results);
+            writeln!(
+                out,
+                "{repo}  — {} {} ({})",
+                counts.total(),
+                if counts.total() == 1 {
+                    "policy"
+                } else {
+                    "policies"
+                },
+                format_repo_counts(&counts),
+            )
+            .unwrap();
+
+            // Left-align policy names so details start at the same column.
+            let policy_width = results
+                .iter()
+                .map(|(name, _)| name.chars().count())
+                .max()
+                .unwrap_or(0);
+
+            for (policy_name, rr) in results {
+                writeln!(
+                    out,
+                    "  {} {:<policy_width$}  {}",
+                    self.format_glyph(&rr.outcome),
+                    policy_name,
+                    Self::format_detail(&rr.outcome),
+                    policy_width = policy_width,
+                )
+                .unwrap();
+            }
+        }
+
+        if !grouped.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format_overview(report));
 
         Ok(out)
     }
@@ -208,6 +360,12 @@ impl Formatter for TableFormatter {
             } else {
                 let table = Table::new(rows).with(Style::sharp()).to_string();
                 writeln!(out, "{table}").unwrap();
+                writeln!(
+                    out,
+                    "Policy summary: {}",
+                    format_counts_line(&PolicyCounts::from_policy(policy))
+                )
+                .unwrap();
             }
         }
 
@@ -279,14 +437,13 @@ impl Formatter for TableFormatter {
             writeln!(out, "{table}").unwrap();
         }
 
-        let s = &report.summary;
+        if !report.results.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format_overview(report));
         write!(
             out,
-            "Summary: {} pass, {} fail, {} skip, {} errors | PRs: {} | Settings: {} | Branch protection: {}",
-            s.passing,
-            s.failing,
-            s.skipped,
-            s.errors,
+            "\nPRs:               {}\nSettings:          {}\nBranch protection: {}",
             format_pr_summary(apply_report),
             format_settings_summary(apply_report),
             format_branch_protection_summary(apply_report),
@@ -377,7 +534,109 @@ mod tests {
         assert!(output.contains("FAIL"));
         assert!(output.contains("SKIP"));
         assert!(output.contains("ERROR"));
-        assert!(output.contains("Summary: 1 pass, 1 fail, 1 skip, 1 errors"));
+        assert!(output.contains("Policy summary: 1 pass, 1 fail, 1 skip, 1 error (50.0% pass)"));
+        assert!(output.contains("Overview"));
+        assert!(output.contains("Pass:         1"));
+        assert!(output.contains("Fail:         1"));
+        assert!(output.contains("Skip:         1"));
+        assert!(output.contains("Error:        1"));
+        assert!(output.contains("Success rate: 50.0%  (1 pass / 2 evaluated)"));
+    }
+
+    /// Regression: with color enabled, ANSI escapes in the Status cell used to
+    /// inflate the column-width calculation and break alignment. Verify that
+    /// every `│` in a body row sits at the same *visible* column as the `┼` in
+    /// the divider above it.
+    #[test]
+    fn colored_status_does_not_break_alignment() {
+        use multipush_core::formatter::Summary;
+
+        let report = make_report(
+            vec![PolicyReport {
+                policy_name: "p".to_string(),
+                description: None,
+                severity: Severity::Error,
+                repo_results: vec![
+                    RepoResult {
+                        repo_name: "org/a".to_string(),
+                        default_branch: "main".to_string(),
+                        outcome: RepoOutcome::Pass {
+                            detail: "ok".to_string(),
+                        },
+                    },
+                    RepoResult {
+                        repo_name: "org/b".to_string(),
+                        default_branch: "main".to_string(),
+                        outcome: RepoOutcome::Fail {
+                            detail: "nope".to_string(),
+                            remediations: vec![],
+                        },
+                    },
+                ],
+            }],
+            Summary {
+                total_repos: 2,
+                passing: 1,
+                failing: 1,
+                skipped: 0,
+                errors: 0,
+            },
+        );
+
+        let formatter = TableFormatter::with_color(true);
+        let output = formatter.format(&report).unwrap();
+
+        fn strip_ansi(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.chars();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    // Skip CSI sequence: `[` ... terminator in `@-~`.
+                    if chars.next() == Some('[') {
+                        for c2 in chars.by_ref() {
+                            if ('@'..='~').contains(&c2) {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        }
+        let visible: Vec<String> = output.lines().map(strip_ansi).collect();
+
+        let divider = visible
+            .iter()
+            .find(|l| l.contains('┼'))
+            .expect("expected a middle divider row");
+        // Visible-character positions of inner column junctions (`┼`).
+        let junction_cols: Vec<usize> = divider
+            .chars()
+            .enumerate()
+            .filter_map(|(i, c)| (c == '┼').then_some(i))
+            .collect();
+        assert!(!junction_cols.is_empty(), "no inner junctions on divider");
+
+        // Each body row's *inner* `│` must sit at the same visible columns.
+        for row in visible
+            .iter()
+            .filter(|l| l.starts_with('│') && (l.contains("org/a") || l.contains("org/b")))
+        {
+            let mut pipe_cols: Vec<usize> = row
+                .chars()
+                .enumerate()
+                .filter_map(|(i, c)| (c == '│').then_some(i))
+                .collect();
+            // Drop the leading and trailing border `│`; keep inner separators.
+            pipe_cols.pop();
+            pipe_cols.remove(0);
+            assert_eq!(
+                pipe_cols, junction_cols,
+                "row dividers misaligned with header divider\n  divider: {divider:?}\n  row    : {row:?}",
+            );
+        }
     }
 
     #[test]
@@ -426,7 +685,81 @@ mod tests {
         assert!(output.contains("Policy: policy-b"));
         // Blank line separates policies
         assert!(output.contains("\n\nPolicy: policy-b"));
-        assert!(output.contains("Summary: 1 pass, 1 fail, 0 skip, 0 errors"));
+        assert!(output.contains("Policies:     2"));
+        assert!(output.contains("Success rate: 50.0%  (1 pass / 2 evaluated)"));
+    }
+
+    #[test]
+    fn by_repo_groups_results_and_lists_each_policy() {
+        let report = make_report(
+            vec![
+                PolicyReport {
+                    policy_name: "codeowners-everywhere".to_string(),
+                    description: None,
+                    severity: Severity::Error,
+                    repo_results: vec![
+                        RepoResult {
+                            repo_name: "acme/api".to_string(),
+                            default_branch: "main".to_string(),
+                            outcome: RepoOutcome::Pass {
+                                detail: "File .github/CODEOWNERS exists".to_string(),
+                            },
+                        },
+                        RepoResult {
+                            repo_name: "acme/web".to_string(),
+                            default_branch: "main".to_string(),
+                            outcome: RepoOutcome::Fail {
+                                detail: "missing".to_string(),
+                                remediations: vec![],
+                            },
+                        },
+                    ],
+                },
+                PolicyReport {
+                    policy_name: "codeowners-portal".to_string(),
+                    description: None,
+                    severity: Severity::Warning,
+                    repo_results: vec![RepoResult {
+                        repo_name: "acme/api".to_string(),
+                        default_branch: "main".to_string(),
+                        outcome: RepoOutcome::Skip {
+                            reason: "not in scope".to_string(),
+                        },
+                    }],
+                },
+            ],
+            Summary {
+                total_repos: 2,
+                passing: 1,
+                failing: 1,
+                skipped: 1,
+                errors: 0,
+            },
+        );
+
+        let formatter = TableFormatter::with_color(false);
+        let output = formatter.format_by_repo(&report).unwrap();
+
+        // Repos appear sorted, each followed by a per-policy line.
+        let api_header = output.find("acme/api  — 2 policies").expect("api header");
+        let web_header = output.find("acme/web  — 1 policy").expect("web header");
+        assert!(
+            api_header < web_header,
+            "acme/api should come before acme/web"
+        );
+
+        // Counts are summarised non-zero kinds only.
+        assert!(output.contains("acme/api  — 2 policies (1 pass, 1 skip)"));
+        assert!(output.contains("acme/web  — 1 policy (1 fail)"));
+
+        // Per-policy lines under each repo.
+        assert!(output.contains("✓ codeowners-everywhere"));
+        assert!(output.contains("• codeowners-portal"));
+        assert!(output.contains("✗ codeowners-everywhere"));
+
+        // Overview block still rendered.
+        assert!(output.contains("Overview"));
+        assert!(output.contains("Success rate: 50.0%  (1 pass / 2 evaluated)"));
     }
 
     #[test]
@@ -445,7 +778,11 @@ mod tests {
         let formatter = TableFormatter::with_color(false);
         let output = formatter.format(&report).unwrap();
 
-        assert_eq!(output, "Summary: 0 pass, 0 fail, 0 skip, 0 errors");
+        // No policies → just the overview block, no leading blank line.
+        assert!(output.starts_with("Overview"));
+        assert!(output.contains("Policies:     0"));
+        assert!(output.contains("Repositories: 0"));
+        assert!(output.contains("Success rate: n/a  (no repositories evaluated)"));
     }
 
     #[test]
@@ -514,6 +851,7 @@ mod tests {
         assert!(output.contains("Policy: require-license"));
         assert!(output.contains("PR created"));
         assert!(output.contains("https://github.com/org/beta/pull/7"));
-        assert!(output.contains("PRs: 1 created"));
+        assert!(output.contains("PRs:               1 created"));
+        assert!(output.contains("Success rate: 50.0%  (1 pass / 2 evaluated)"));
     }
 }

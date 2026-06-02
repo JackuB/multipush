@@ -190,10 +190,43 @@ Each policy (or recipe) must specify a `targets` block. Per-policy targets overr
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `repos` | string (glob) | Yes | — | Glob pattern for repo matching |
+| `repos` | string or list of strings (globs) | Yes | — | One glob, or several globs OR'd together |
 | `exclude` | list of strings | No | `[]` | Glob patterns to exclude |
 | `exclude_archived` | bool | No | `true` | Skip archived repos |
 | `filters` | list | No | `[]` | Additional filters |
+
+#### Targeting an explicit set of repos
+
+`repos` accepts either a single glob or a list of globs — a repo is included
+when **any** glob matches. There are three useful forms:
+
+```yaml
+# 1. A single org-wide glob (most common).
+targets:
+  repos: "acme/*"
+
+# 2. An explicit list. Each entry is itself a glob, so you can mix
+#    exact names and wildcards.
+targets:
+  repos:
+    - acme/api-gateway
+    - acme/web-frontend
+    - acme/worker-*
+
+# 3. Brace-expansion shorthand for a small, fixed set on one line.
+targets:
+  repos: "acme/{api-gateway,web-frontend,worker-pool}"
+```
+
+To carve repos out of a wider match, combine with `exclude`:
+
+```yaml
+targets:
+  repos: "acme/*"
+  exclude:
+    - "acme/legacy-*"
+    - "acme/sandbox"
+```
 
 ### Filters
 
@@ -370,6 +403,7 @@ Evaluate policies and report compliance (read-only).
 multipush check -c config.yml
 multipush check -c config.yml -f markdown --fail-on warning
 multipush check -c config.yml -p require-readme -p require-license
+multipush check -c config.yml --by-repo
 ```
 
 | Flag | Description | Default |
@@ -377,11 +411,41 @@ multipush check -c config.yml -p require-readme -p require-license
 | `-c, --config` | Config file or directory (repeatable) | auto-discovery |
 | `-f, --format` | Output format (`table`, `markdown`) | `table` |
 | `-p, --policy` | Run only named policies (repeatable) | all |
+| `--by-repo` | Group findings by repository instead of by policy | — |
 | `--fail-on` | Exit 1 if any result >= severity | `error` |
 | `--concurrency` | Max concurrent repo evaluations | `10` |
 | `--no-color` | Disable colors | — |
 | `-v` | Verbosity (`-v` info, `-vv` debug, `-vvv` trace) | errors only |
 | `-q, --quiet` | Suppress non-error output | — |
+
+#### `--by-repo` output
+
+The default view groups findings by policy (one table per policy). With
+`--by-repo`, the same results are pivoted so each repository gets a single
+block listing every policy that touched it. Useful when you want to answer
+*"what's wrong with **this repo**?"* rather than *"who fails **this rule**?"*
+
+```
+acme/portal  — 2 policies (2 pass)
+  ✓ codeowners-everywhere  File .github/CODEOWNERS exists
+  ✓ codeowners-portal      File .github/CODEOWNERS contains required content
+
+acme/portal-tennable-test  — 2 policies (2 fail)
+  ✗ codeowners-everywhere  No file found at any of: CODEOWNERS, .github/CODEOWNERS
+  ✗ codeowners-portal      No file found at any of: CODEOWNERS, .github/CODEOWNERS
+
+Overview
+────────
+Policies:     2
+Repositories: 2
+Pass:         2
+Fail:         2
+Skip:         0
+Error:        0
+Success rate: 50.0%  (2 pass / 4 evaluated)
+```
+
+Glyphs: `✓` pass, `✗` fail, `•` skip, `!` error.
 
 ### `apply`
 

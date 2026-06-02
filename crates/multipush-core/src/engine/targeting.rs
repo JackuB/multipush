@@ -14,9 +14,17 @@ use crate::Result;
 /// `topic`, `visibility`). Use [`filter_repos`] for the full async filter
 /// chain.
 pub fn filter_repos_basic(repos: &[Repo], targets: &TargetConfig) -> Result<Vec<Repo>> {
-    let include = Glob::new(&targets.repos)
-        .map_err(|e| CoreError::Config(format!("invalid include glob '{}': {e}", targets.repos)))?
-        .compile_matcher();
+    let include = {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in &targets.repos {
+            let glob = Glob::new(pattern)
+                .map_err(|e| CoreError::Config(format!("invalid include glob '{pattern}': {e}")))?;
+            builder.add(glob);
+        }
+        builder
+            .build()
+            .map_err(|e| CoreError::Config(format!("failed to build include set: {e}")))?
+    };
 
     let exclude = {
         let mut builder = GlobSetBuilder::new();
@@ -118,7 +126,7 @@ mod tests {
 
     fn targets(repos: &str) -> TargetConfig {
         TargetConfig {
-            repos: repos.to_string(),
+            repos: vec![repos.to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],
@@ -139,6 +147,31 @@ mod tests {
     }
 
     #[test]
+    fn include_matching_multiple_globs() {
+        let repos = vec![
+            make_repo("acme/api", false),
+            make_repo("acme/web", false),
+            make_repo("acme/internal-tool", false),
+            make_repo("other/thing", false),
+        ];
+
+        let t = TargetConfig {
+            repos: vec!["acme/api".to_string(), "acme/web*".to_string()],
+            exclude: vec![],
+            exclude_archived: true,
+            filters: vec![],
+        };
+
+        let mut names: Vec<String> = filter_repos_basic(&repos, &t)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.full_name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["acme/api", "acme/web"]);
+    }
+
+    #[test]
     fn exclude_filtering() {
         let repos = vec![
             make_repo("org/alpha", false),
@@ -147,7 +180,7 @@ mod tests {
         ];
 
         let t = TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec!["org/alpha".to_string()],
             exclude_archived: true,
             filters: vec![],
@@ -172,7 +205,7 @@ mod tests {
         let repos = vec![make_repo("org/active", false), make_repo("org/old", true)];
 
         let t = TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: false,
             filters: vec![],
@@ -192,7 +225,7 @@ mod tests {
         ];
 
         let t = TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec!["org/exclude-*".to_string()],
             exclude_archived: true,
             filters: vec![],
@@ -207,7 +240,7 @@ mod tests {
     fn invalid_glob_error() {
         let repos = vec![make_repo("org/a", false)];
         let t = TargetConfig {
-            repos: "[invalid".to_string(),
+            repos: vec!["[invalid".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],
@@ -225,7 +258,7 @@ mod tests {
 
         let provider = MockProvider::new(vec![]);
         let t = TargetConfig {
-            repos: "org/*".into(),
+            repos: vec!["org/*".into()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![FilterConfig::Topic("security".into())],
@@ -244,7 +277,7 @@ mod tests {
 
         let provider = MockProvider::new(vec![]);
         let t = TargetConfig {
-            repos: "org/*".into(),
+            repos: vec!["org/*".into()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![FilterConfig::Visibility(Visibility::Public)],
@@ -265,7 +298,7 @@ mod tests {
             MockProvider::new(vec![a.clone(), b.clone()]).with_file("org/a:Dockerfile", "FROM x");
 
         let t = TargetConfig {
-            repos: "org/*".into(),
+            repos: vec!["org/*".into()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![

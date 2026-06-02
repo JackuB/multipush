@@ -36,6 +36,10 @@ enum Command {
         #[arg(short, long)]
         policy: Vec<String>,
 
+        /// Group results by repository instead of by policy
+        #[arg(long)]
+        by_repo: bool,
+
         /// Increase verbosity (-v = info, -vv = debug, -vvv = trace)
         #[arg(short, long, action = clap::ArgAction::Count)]
         verbose: u8,
@@ -187,6 +191,7 @@ fn main() -> ExitCode {
             config,
             format,
             policy,
+            by_repo,
             verbose,
             quiet,
             no_color,
@@ -195,7 +200,15 @@ fn main() -> ExitCode {
         } => {
             init_tracing(verbose, quiet);
 
-            match run_check(config, format, policy, no_color, concurrency, fail_on) {
+            match run_check(
+                config,
+                format,
+                policy,
+                by_repo,
+                no_color,
+                concurrency,
+                fail_on,
+            ) {
                 Ok(code) => code,
                 Err(e) => {
                     error!("{e:#}");
@@ -296,10 +309,12 @@ fn paths_to_sources(paths: &[PathBuf]) -> Vec<ConfigSource> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_check(
     config_paths: Vec<PathBuf>,
     format: String,
     policy_filter: Vec<String>,
+    by_repo: bool,
     no_color: bool,
     concurrency: usize,
     fail_on: Severity,
@@ -325,7 +340,11 @@ fn run_check(
         concurrency,
     ))?;
 
-    let output = formatter.format(&report)?;
+    let output = if by_repo {
+        formatter.format_by_repo(&report)?
+    } else {
+        formatter.format(&report)?
+    };
     if !output.is_empty() {
         println!("{output}");
     }

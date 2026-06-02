@@ -37,7 +37,7 @@ fn standard_policy() -> PolicyConfig {
         description: None,
         severity: Severity::Warning,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],
@@ -165,7 +165,7 @@ async fn repo_settings_merged_from_multiple_rules() {
         description: None,
         severity: Severity::Warning,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],
@@ -181,7 +181,7 @@ async fn repo_settings_merged_from_multiple_rules() {
         description: None,
         severity: Severity::Warning,
         targets: TargetConfig {
-            repos: "org/*".to_string(),
+            repos: vec!["org/*".to_string()],
             exclude: vec![],
             exclude_archived: true,
             filters: vec![],

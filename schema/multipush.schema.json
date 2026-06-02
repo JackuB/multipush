@@ -468,6 +468,20 @@
       },
       "additionalProperties": false
     },
+    "ReposSchema": {
+      "description": "Schema marker: `repos` accepts a single string or a list of strings.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
     "RequiredPullRequestReviewsConfig": {
       "type": "object",
       "properties": {
@@ -626,7 +640,12 @@
           }
         },
         "repos": {
-          "type": "string"
+          "description": "One glob pattern, or a list of glob patterns. A repo matches if **any** pattern matches. Brace expansion works inside a single pattern, e.g. `org/{api,web}`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReposSchema"
+            }
+          ]
         }
       },
       "additionalProperties": false
