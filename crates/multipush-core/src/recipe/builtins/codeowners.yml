@@ -1,17 +1,30 @@
 name: codeowners
-description: "Ensure every repository has a CODEOWNERS file"
+description: "Ensure every repository has a CODEOWNERS file (optionally with auto-create and team enforcement)"
 params:
-  default_owner:
+  default_content:
     type: string
-    required: true
-    description: "Default code owner (e.g. @my-team)"
-# GitHub honours CODEOWNERS in the repo root, .github/, or docs/. Treat any
-# of them as compliant; create the root file with the default owner when none
-# exist.
+    required: false
+    description: "Full body to write when the file is missing (e.g. '* @my-team\\n'). Omit for discovery-only."
+  must_contain:
+    type: string
+    required: false
+    description: "If set, an existing file must contain this substring (typically the team handle). Otherwise the rule FAILs."
+# GitHub honours CODEOWNERS in the repo root, .github/, or docs/. Treat any of
+# them as compliant. When `default_content` is provided, missing files are
+# auto-created at the canonical location with that body. When `must_contain`
+# is provided, an existing file that doesn't mention it FAILs (without auto-
+# fix — we can't safely splice into a hand-written CODEOWNERS).
+#
+# Both params are optional. Empty substitutions are normalized to "no value"
+# in EnsureFileConfig, so omitting a param yields the natural behavior:
+#   - no params               → report-only existence check
+#   - default_content only    → existence + auto-create
+#   - both                    → existence + auto-create + content enforcement
 rules:
   - !ensure_file
     paths:
       - CODEOWNERS
       - .github/CODEOWNERS
       - docs/CODEOWNERS
-    default_content: "* {{ default_owner }}\n"
+    default_content: "{{ default_content }}"
+    must_contain: "{{ must_contain }}"

@@ -3,6 +3,7 @@ pub mod engine;
 pub mod error;
 pub mod formatter;
 pub mod model;
+pub mod policy_source;
 pub mod provider;
 pub mod recipe;
 pub mod rule;

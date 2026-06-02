@@ -51,6 +51,27 @@ impl Remediation {
     }
 }
 
+/// A [`Remediation`] paired with the type of rule that produced it.
+///
+/// The evaluator attaches `rule_type` after `Rule::evaluate` returns, so
+/// individual `Rule` implementations don't need to thread it through every
+/// construction site. Consumers (PR body, SARIF) use it for provenance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttributedRemediation {
+    pub rule_type: String,
+    #[serde(flatten)]
+    pub remediation: Remediation,
+}
+
+impl AttributedRemediation {
+    pub fn new(rule_type: impl Into<String>, remediation: Remediation) -> Self {
+        Self {
+            rule_type: rule_type.into(),
+            remediation,
+        }
+    }
+}
+
 /// Context passed to each rule evaluation, providing access to the
 /// provider and the target repository.
 pub struct RuleContext<'a> {

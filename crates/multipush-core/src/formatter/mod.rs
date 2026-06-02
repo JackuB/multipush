@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::executor::{ApplyReport, PrAction, PrActionKind, SettingsActionKind};
 use crate::model::Severity;
-use crate::rule::Remediation;
+use crate::rule::{AttributedRemediation, Remediation};
 use crate::Result;
 
 /// Top-level check report containing per-policy results and an aggregate summary.
@@ -41,7 +41,7 @@ pub enum RepoOutcome {
     Fail {
         detail: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        remediations: Vec<Remediation>,
+        remediations: Vec<AttributedRemediation>,
     },
     Skip {
         reason: String,
@@ -155,6 +155,48 @@ pub fn build_pr_action_map(
     insert_actions(&mut map, &report.prs_errored);
 
     map
+}
+
+/// Compute the (action, pr_url) labels for a single (repo, policy) row in an
+/// apply table.
+///
+/// Falls back to deriving a label from the outcome when there's no PR action
+/// recorded, so the table can distinguish:
+///
+/// - `Report only` — FAIL with no remediation (rule found a problem but
+///   doesn't know how to fix it; e.g. discovery-mode `ensure_file` with no
+///   `default_content`).
+/// - `Limited (max-prs)` — FAIL with a real file remediation that the
+///   executor suppressed because the `--max-prs` budget was exhausted.
+/// - `-` — anything else (skipped, settings-only remediation handled in its
+///   own table, etc.).
+pub fn derive_pr_action(
+    action_map: &std::collections::HashMap<(String, String), (String, String)>,
+    repo_name: &str,
+    policy_name: &str,
+    outcome: &RepoOutcome,
+) -> (String, String) {
+    if let Some((label, url)) = action_map.get(&(repo_name.to_string(), policy_name.to_string())) {
+        return (label.clone(), url.clone());
+    }
+    match outcome {
+        RepoOutcome::Fail { remediations, .. } => {
+            let has_file_changes = remediations.iter().any(|r| {
+                matches!(
+                    &r.remediation,
+                    Remediation::FileChanges { changes, .. } if !changes.is_empty()
+                )
+            });
+            if has_file_changes {
+                ("Limited (max-prs)".to_string(), "-".to_string())
+            } else if remediations.is_empty() {
+                ("Report only".to_string(), "-".to_string())
+            } else {
+                ("-".to_string(), "-".to_string())
+            }
+        }
+        _ => ("-".to_string(), "-".to_string()),
+    }
 }
 
 /// Build the PR summary line for apply reports.

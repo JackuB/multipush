@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use multipush_core::config::{ApplyConfig, DefaultsConfig, ExistingPrStrategy};
 use multipush_core::engine::executor::{execute, PrActionKind};
 use multipush_core::model::{PrState, PullRequest};
+use multipush_core::policy_source::PolicySourceInfo;
 use multipush_core::testing::{default_config, make_report_with_failures, MockProvider};
 
 #[tokio::test]
@@ -11,9 +12,16 @@ async fn apply_mode_dry_run() {
     let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
     let config = default_config();
 
-    let result = execute(&report, &config, &provider, true, 10)
-        .await
-        .unwrap();
+    let result = execute(
+        &report,
+        &config,
+        &provider,
+        true,
+        10,
+        &PolicySourceInfo::default(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.prs_created.len(), 2);
     assert!(result
@@ -29,9 +37,16 @@ async fn apply_mode_create_pr() {
     let report = make_report_with_failures(&["org/alpha"], true);
     let config = default_config();
 
-    let result = execute(&report, &config, &provider, false, 10)
-        .await
-        .unwrap();
+    let result = execute(
+        &report,
+        &config,
+        &provider,
+        false,
+        10,
+        &PolicySourceInfo::default(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.prs_created.len(), 1);
     assert_eq!(result.prs_created[0].action, PrActionKind::Created);
@@ -66,9 +81,16 @@ async fn apply_mode_existing_pr_skip() {
         }),
     });
 
-    let result = execute(&report, &config, &provider, false, 10)
-        .await
-        .unwrap();
+    let result = execute(
+        &report,
+        &config,
+        &provider,
+        false,
+        10,
+        &PolicySourceInfo::default(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.prs_skipped.len(), 1);
     assert_eq!(result.prs_created.len(), 0);
@@ -91,9 +113,16 @@ async fn apply_mode_existing_pr_update() {
     let report = make_report_with_failures(&["org/alpha"], true);
     let config = default_config();
 
-    let result = execute(&report, &config, &provider, false, 10)
-        .await
-        .unwrap();
+    let result = execute(
+        &report,
+        &config,
+        &provider,
+        false,
+        10,
+        &PolicySourceInfo::default(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.prs_updated.len(), 1);
     assert_eq!(result.prs_created.len(), 0);
@@ -106,9 +135,16 @@ async fn apply_mode_max_prs() {
     let report = make_report_with_failures(&["org/a", "org/b", "org/c", "org/d", "org/e"], true);
     let config = default_config();
 
-    let result = execute(&report, &config, &provider, false, 2)
-        .await
-        .unwrap();
+    let result = execute(
+        &report,
+        &config,
+        &provider,
+        false,
+        2,
+        &PolicySourceInfo::default(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.prs_created.len(), 2);
     assert_eq!(result.prs_limited, 3);

@@ -5,7 +5,7 @@ use crate::config::{PolicyConfig, RootConfig};
 use crate::formatter::{PolicyReport, RepoOutcome, RepoResult, Report, Summary};
 use crate::model::Repo;
 use crate::provider::Provider;
-use crate::rule::{Rule, RuleContext, RuleResult};
+use crate::rule::{AttributedRemediation, Rule, RuleContext, RuleResult};
 use crate::Result;
 
 use super::targeting::filter_repos;
@@ -75,22 +75,29 @@ async fn evaluate_repo(
     repo: &Repo,
     rules: &[Box<dyn Rule>],
 ) -> RepoResult {
-    let mut outcomes: Vec<RuleResult> = Vec::new();
+    // Pair each result with the rule_type that produced it so remediations
+    // carry provenance into the report (used by the PR-body generator to
+    // surface "rule: ensure_file" next to each change).
+    let mut outcomes: Vec<(String, RuleResult)> = Vec::new();
 
     for rule in rules {
         let ctx = RuleContext { provider, repo };
+        let rule_type = rule.rule_type().to_string();
         match rule.evaluate(&ctx).await {
-            Ok(result) => outcomes.push(result),
+            Ok(result) => outcomes.push((rule_type, result)),
             Err(e) => {
                 error!(
                     repo = %repo.full_name,
-                    rule = rule.rule_type(),
+                    rule = %rule_type,
                     error = %e,
                     "rule evaluation error"
                 );
-                outcomes.push(RuleResult::Error {
-                    message: e.to_string(),
-                });
+                outcomes.push((
+                    rule_type,
+                    RuleResult::Error {
+                        message: e.to_string(),
+                    },
+                ));
             }
         }
     }
@@ -103,15 +110,15 @@ async fn evaluate_repo(
     }
 }
 
-fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
+fn aggregate_outcomes(outcomes: &[(String, RuleResult)]) -> RepoOutcome {
     // Priority: errors > failures > skips > passes
     let mut has_error = false;
     let mut has_fail = false;
     let mut has_skip = false;
     let mut details = Vec::new();
-    let mut remediations = Vec::new();
+    let mut remediations: Vec<AttributedRemediation> = Vec::new();
 
-    for o in outcomes {
+    for (rule_type, o) in outcomes {
         match o {
             RuleResult::Error { message } => {
                 has_error = true;
@@ -124,7 +131,7 @@ fn aggregate_outcomes(outcomes: &[RuleResult]) -> RepoOutcome {
                 has_fail = true;
                 details.push(detail.clone());
                 if let Some(r) = remediation {
-                    remediations.push(r.clone());
+                    remediations.push(AttributedRemediation::new(rule_type, r.clone()));
                 }
             }
             RuleResult::Skip { reason } => {
@@ -270,8 +277,8 @@ mod tests {
     #[test]
     fn aggregate_all_pass() {
         let outcomes = vec![
-            RuleResult::Pass { detail: "a".into() },
-            RuleResult::Pass { detail: "b".into() },
+            ("t".into(), RuleResult::Pass { detail: "a".into() }),
+            ("t".into(), RuleResult::Pass { detail: "b".into() }),
         ];
         match aggregate_outcomes(&outcomes) {
             RepoOutcome::Pass { detail } => assert!(detail.contains("a") && detail.contains("b")),
@@ -282,13 +289,19 @@ mod tests {
     #[test]
     fn aggregate_fail_takes_priority() {
         let outcomes = vec![
-            RuleResult::Pass {
-                detail: "ok".into(),
-            },
-            RuleResult::Fail {
-                detail: "bad".into(),
-                remediation: None,
-            },
+            (
+                "t".into(),
+                RuleResult::Pass {
+                    detail: "ok".into(),
+                },
+            ),
+            (
+                "t".into(),
+                RuleResult::Fail {
+                    detail: "bad".into(),
+                    remediation: None,
+                },
+            ),
         ];
         match aggregate_outcomes(&outcomes) {
             RepoOutcome::Fail { .. } => {}
@@ -299,13 +312,19 @@ mod tests {
     #[test]
     fn aggregate_error_takes_priority() {
         let outcomes = vec![
-            RuleResult::Fail {
-                detail: "bad".into(),
-                remediation: None,
-            },
-            RuleResult::Error {
-                message: "boom".into(),
-            },
+            (
+                "t".into(),
+                RuleResult::Fail {
+                    detail: "bad".into(),
+                    remediation: None,
+                },
+            ),
+            (
+                "t".into(),
+                RuleResult::Error {
+                    message: "boom".into(),
+                },
+            ),
         ];
         match aggregate_outcomes(&outcomes) {
             RepoOutcome::Error { .. } => {}

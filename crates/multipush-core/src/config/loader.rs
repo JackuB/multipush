@@ -1026,7 +1026,7 @@ provider:
 policies:
   - recipe: codeowners
     params:
-      default_owner: "@platform-team"
+      default_content: "* @platform-team\n"
     targets:
       repos: "test-org/*"
 "#;
@@ -1050,6 +1050,9 @@ policies:
                     .as_ref()
                     .unwrap()
                     .contains("@platform-team"));
+                // No must_contain param was provided → empty substitution
+                // normalized away by EnsureFileConfig's empty_string_as_none.
+                assert!(cfg.must_contain.is_none());
             }
             _ => panic!("expected EnsureFile rule"),
         }

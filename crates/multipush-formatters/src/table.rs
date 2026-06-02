@@ -5,7 +5,7 @@ use tabled::{Table, Tabled};
 
 use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
 use multipush_core::formatter::{
-    build_pr_action_map, format_branch_protection_summary, format_pr_summary,
+    build_pr_action_map, derive_pr_action, format_branch_protection_summary, format_pr_summary,
     format_settings_summary, group_by_repo, has_branch_protection_actions, has_settings_actions,
     Formatter, PolicyCounts, PolicyReport, RepoCounts, RepoOutcome, Report,
 };
@@ -340,11 +340,12 @@ impl Formatter for TableFormatter {
                 .repo_results
                 .iter()
                 .map(|rr| {
-                    let key = (rr.repo_name.clone(), policy.policy_name.clone());
-                    let (action_label, pr_url) = action_map
-                        .get(&key)
-                        .map(|(a, u)| (a.clone(), u.clone()))
-                        .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+                    let (action_label, pr_url) = derive_pr_action(
+                        &action_map,
+                        &rr.repo_name,
+                        &policy.policy_name,
+                        &rr.outcome,
+                    );
 
                     ApplyRow {
                         repo: rr.repo_name.clone(),

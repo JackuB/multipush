@@ -11,7 +11,7 @@ use crate::model::{
     RepoSettings, RepoSettingsPatch, Severity, Visibility,
 };
 use crate::provider::Provider;
-use crate::rule::Remediation;
+use crate::rule::{AttributedRemediation, Remediation};
 use crate::Result;
 
 /// A configurable mock provider for testing evaluator and executor logic.
@@ -250,14 +250,17 @@ pub fn default_config() -> RootConfig {
 /// Build a `Report` with failing repos, optionally with remediations.
 pub fn make_report_with_failures(repo_names: &[&str], with_remediations: bool) -> Report {
     let remediations = if with_remediations {
-        vec![Remediation::FileChanges {
-            description: "Create LICENSE file".to_string(),
-            changes: vec![FileChange {
-                path: "LICENSE".to_string(),
-                content: Some("MIT License".to_string()),
-                message: "Add LICENSE".to_string(),
-            }],
-        }]
+        vec![AttributedRemediation::new(
+            "ensure_file",
+            Remediation::FileChanges {
+                description: "Create LICENSE file".to_string(),
+                changes: vec![FileChange {
+                    path: "LICENSE".to_string(),
+                    content: Some("MIT License".to_string()),
+                    message: "Add LICENSE".to_string(),
+                }],
+            },
+        )]
     } else {
         vec![]
     };

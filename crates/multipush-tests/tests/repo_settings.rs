@@ -58,9 +58,16 @@ async fn run_check(config_policies: Vec<PolicyConfig>, provider: &MockProvider) 
 
 async fn run_apply(report: &Report, provider: &MockProvider, dry_run: bool) -> ApplyReport {
     let config = test_config(vec![]);
-    execute(report, &config, provider, dry_run, 10)
-        .await
-        .unwrap()
+    execute(
+        report,
+        &config,
+        provider,
+        dry_run,
+        10,
+        &multipush_core::policy_source::PolicySourceInfo::default(),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -93,7 +100,8 @@ async fn repo_settings_check_fail_generates_minimal_patch() {
         other => panic!("expected Fail, got {other:?}"),
     };
     assert_eq!(remediations.len(), 1);
-    match &remediations[0] {
+    assert_eq!(remediations[0].rule_type, "repo_settings");
+    match &remediations[0].remediation {
         multipush_core::rule::Remediation::RepoSettings { patch, .. } => {
             assert_eq!(patch.has_wiki, Some(false));
             assert_eq!(patch.has_projects, Some(false));

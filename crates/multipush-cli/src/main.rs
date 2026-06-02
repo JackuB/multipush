@@ -158,6 +158,15 @@ enum Command {
         /// Exit 1 if any result >= severity
         #[arg(long, default_value = "error")]
         fail_on: Severity,
+
+        /// URL of the repo where the policy YAML lives. Inlined into PR
+        /// bodies under "Source" so reviewers can trace back to the policy.
+        /// When omitted, multipush reads GitHub Actions env vars
+        /// (GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_SHA, GITHUB_RUN_ID,
+        /// GITHUB_WORKFLOW) and falls back to no Source block when not in
+        /// Actions.
+        #[arg(long)]
+        policy_source_url: Option<String>,
     },
 }
 
@@ -272,6 +281,7 @@ fn main() -> ExitCode {
             quiet,
             no_color,
             fail_on,
+            policy_source_url,
         } => {
             init_tracing(verbose, quiet);
 
@@ -285,6 +295,7 @@ fn main() -> ExitCode {
                 auto_merge,
                 no_color,
                 fail_on,
+                policy_source_url,
             ) {
                 Ok(code) => code,
                 Err(e) => {
@@ -377,6 +388,7 @@ fn run_apply(
     auto_merge: bool,
     no_color: bool,
     fail_on: Severity,
+    policy_source_url: Option<String>,
 ) -> Result<ExitCode> {
     let sources = paths_to_sources(&config_paths);
     let mut config = load_config(&sources).context("failed to load config")?;
@@ -418,12 +430,22 @@ fn run_apply(
         registry::create_rules,
         concurrency,
     ))?;
+    // Build policy provenance from GitHub Actions env vars (when present),
+    // then let `--policy-source-url` override the repo URL — useful for cron
+    // jobs or self-hosted runs where the envvars are absent.
+    let mut policy_source =
+        multipush_core::policy_source::PolicySourceInfo::from_github_actions_env();
+    if let Some(url) = policy_source_url {
+        policy_source = policy_source.with_repo_url(url);
+    }
+
     let apply_report = rt.block_on(execute(
         &report,
         &config,
         provider.as_ref(),
         dry_run,
         max_prs,
+        &policy_source,
     ))?;
 
     let output = formatter.format_apply(&apply_report)?;

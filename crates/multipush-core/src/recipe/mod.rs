@@ -587,7 +587,10 @@ rules:
         let recipe = recipes.iter().find(|r| r.name == "codeowners").unwrap();
 
         let mut params = HashMap::new();
-        params.insert("default_owner".to_string(), "@my-org/platform".to_string());
+        params.insert(
+            "default_content".to_string(),
+            "* @my-org/platform\n".to_string(),
+        );
 
         let expanded = recipe.expand(&params).unwrap();
         let map = expanded.as_mapping().unwrap();
@@ -597,6 +600,40 @@ rules:
             .as_sequence()
             .unwrap();
         assert_eq!(rules.len(), 1);
+    }
+
+    #[test]
+    fn expand_codeowners_recipe_no_params_is_discovery_only() {
+        // With no params, the recipe is a pure existence check: both
+        // default_content and must_contain substitute to empty strings, which
+        // EnsureFileConfig normalizes to None.
+        let recipes = builtin::builtin_recipes().unwrap();
+        let recipe = recipes.iter().find(|r| r.name == "codeowners").unwrap();
+
+        let expanded = recipe.expand(&HashMap::new()).unwrap();
+        let map = expanded.as_mapping().unwrap();
+        let rules = map
+            .get(Value::String("rules".into()))
+            .unwrap()
+            .as_sequence()
+            .unwrap();
+        assert_eq!(rules.len(), 1);
+
+        // Round-trip through EnsureFileConfig to confirm the empty fields
+        // dropped out per `empty_string_as_none`.
+        let rule_yaml = serde_yaml_ng::to_string(&rules[0]).unwrap();
+        let cfg: crate::config::RuleDefinition = serde_yaml_ng::from_str(&rule_yaml).unwrap();
+        let crate::config::RuleDefinition::EnsureFile(ensure) = cfg else {
+            panic!("expected ensure_file rule");
+        };
+        assert!(
+            ensure.default_content.is_none(),
+            "expected empty default_content to normalize to None"
+        );
+        assert!(
+            ensure.must_contain.is_none(),
+            "expected empty must_contain to normalize to None"
+        );
     }
 
     #[test]

@@ -1,5 +1,18 @@
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// Treat an empty or whitespace-only string as `None`. Recipes substitute
+/// missing/blank params as empty strings (e.g. `must_contain: ""`), and we
+/// don't want that to mean "the file must contain the empty string" — which
+/// is trivially true and silently disables the predicate. Same logic for
+/// `default_content`: an empty body is never a meaningful canonical file.
+fn empty_string_as_none<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(de)?;
+    Ok(opt.filter(|s| !s.trim().is_empty()))
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -30,17 +43,25 @@ pub struct EnsureFileConfig {
     /// Body to write when the file is missing. This only seeds creation — it is
     /// never enforced on existing files. When `must_equal` is set, that value
     /// governs creation instead and `default_content` must be omitted.
-    #[serde(default)]
+    ///
+    /// Empty or whitespace-only strings are normalized to `None` so recipes
+    /// can leave the field unsubstituted without accidentally requesting
+    /// creation of a blank file.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub default_content: Option<String>,
     /// Predicate: an existing file must contain this substring.
-    #[serde(default)]
+    ///
+    /// Empty or whitespace-only strings are normalized to `None` (any file
+    /// trivially "contains" the empty string, so substituting an unset recipe
+    /// param into this field must not silently turn the check off).
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub must_contain: Option<String>,
     /// Predicate: an existing file must match this regular expression.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub must_match: Option<String>,
     /// Predicate: an existing file must equal this exactly; drift is overwritten
     /// as a remediation. Also used as the creation body for a missing file.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub must_equal: Option<String>,
 }
 
@@ -167,4 +188,40 @@ pub struct RepoSettingsConfig {
 #[serde(deny_unknown_fields)]
 pub struct FileAbsentConfig {
     pub path: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Recipe expansion leaves unsubstituted params as empty strings in the
+    /// rendered YAML (e.g. `must_contain: ""`). Those must round-trip into
+    /// `Option<String>::None`, not `Some("")` — otherwise predicates like
+    /// `must_contain: ""` silently pass (every file "contains" empty) and
+    /// `default_content: ""` would write blank files.
+    #[test]
+    fn empty_strings_normalize_to_none_on_ensure_file_config() {
+        let yaml = r#"
+path: CODEOWNERS
+default_content: ""
+must_contain: ""
+must_match: "   "
+"#;
+        let cfg: EnsureFileConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(cfg.default_content.is_none());
+        assert!(cfg.must_contain.is_none());
+        assert!(cfg.must_match.is_none());
+    }
+
+    #[test]
+    fn non_empty_strings_are_preserved() {
+        let yaml = r#"
+path: CODEOWNERS
+default_content: "* @team\n"
+must_contain: "@team"
+"#;
+        let cfg: EnsureFileConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(cfg.default_content.as_deref(), Some("* @team\n"));
+        assert_eq!(cfg.must_contain.as_deref(), Some("@team"));
+    }
 }

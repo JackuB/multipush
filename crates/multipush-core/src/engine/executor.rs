@@ -7,8 +7,9 @@ use crate::formatter::{RepoOutcome, Report};
 use crate::model::{
     BranchProtectionPatch, FileChange, PullRequest, Repo, RepoSettingsPatch, Visibility,
 };
+use crate::policy_source::PolicySourceInfo;
 use crate::provider::Provider;
-use crate::rule::Remediation;
+use crate::rule::{AttributedRemediation, Remediation};
 use crate::Result;
 
 /// Result of the apply phase: the original check report plus all PR actions taken.
@@ -78,12 +79,17 @@ pub enum PrActionKind {
 }
 
 /// Execute the apply phase: open or update PRs for failing repositories.
+///
+/// `policy_source` is woven into the PR body so reviewers can see which repo
+/// and workflow run produced the PR; pass `&PolicySourceInfo::default()` when
+/// the caller has nothing to contribute.
 pub async fn execute(
     report: &Report,
     config: &RootConfig,
     provider: &dyn Provider,
     dry_run: bool,
     max_prs: usize,
+    policy_source: &PolicySourceInfo,
 ) -> Result<ApplyReport> {
     let apply_config = config.defaults.as_ref().and_then(|d| d.apply.as_ref());
 
@@ -127,7 +133,7 @@ pub async fn execute(
             // Collect non-file patches separately; they don't flow through
             // the PR pipeline.
             for rem in all_remediations {
-                match rem {
+                match &rem.remediation {
                     Remediation::RepoSettings { patch, .. } => {
                         let entry = settings_by_repo
                             .entry(repo.full_name.clone())
@@ -154,10 +160,17 @@ pub async fn execute(
                 }
             }
 
-            // Only run the PR flow if this (repo, policy) has file changes.
-            let has_file_changes = all_remediations
-                .iter()
-                .any(|r| matches!(r, Remediation::FileChanges { .. }));
+            // Only run the PR flow if this (repo, policy) has actual file
+            // changes to push. A rule may emit `FileChanges` with an empty
+            // vec to mean "I detected a problem but have no fix" — treat that
+            // as report-only so we don't consume max-prs budget or try to
+            // push an empty branch.
+            let has_file_changes = all_remediations.iter().any(|r| {
+                matches!(
+                    &r.remediation,
+                    Remediation::FileChanges { changes, .. } if !changes.is_empty()
+                )
+            });
             if !has_file_changes {
                 continue;
             }
@@ -291,6 +304,7 @@ pub async fn execute(
                 &policy_report.severity,
                 &repo.full_name,
                 remediations,
+                policy_source,
             );
 
             if dry_run {
@@ -515,10 +529,10 @@ fn build_repo(full_name: &str, default_branch: &str) -> Repo {
     }
 }
 
-fn collect_changes(remediations: &[Remediation]) -> Vec<FileChange> {
+fn collect_changes(remediations: &[AttributedRemediation]) -> Vec<FileChange> {
     remediations
         .iter()
-        .flat_map(|r| match r {
+        .flat_map(|r| match &r.remediation {
             Remediation::FileChanges { changes, .. } => changes.clone(),
             Remediation::RepoSettings { .. } | Remediation::BranchProtection { .. } => Vec::new(),
         })
@@ -530,7 +544,8 @@ fn generate_pr_body(
     description: Option<&str>,
     severity: &crate::model::Severity,
     repo_name: &str,
-    remediations: &[Remediation],
+    remediations: &[AttributedRemediation],
+    policy_source: &PolicySourceInfo,
 ) -> String {
     let mut body = String::new();
 
@@ -544,13 +559,14 @@ fn generate_pr_body(
     body.push_str(&format!("**Repository:** {repo_name}\n\n"));
 
     body.push_str("### Changes\n\n");
-    for remediation in remediations {
-        match remediation {
+    for r in remediations {
+        let rule_type = &r.rule_type;
+        match &r.remediation {
             Remediation::FileChanges {
                 description,
                 changes,
             } => {
-                body.push_str(&format!("- {description}\n"));
+                body.push_str(&format!("- {description} *(rule: `{rule_type}`)*\n"));
                 for change in changes {
                     let action = if change.content.is_some() {
                         "create/update"
@@ -561,15 +577,20 @@ fn generate_pr_body(
                 }
             }
             Remediation::RepoSettings { description, .. } => {
-                body.push_str(&format!("- {description}\n"));
+                body.push_str(&format!("- {description} *(rule: `{rule_type}`)*\n"));
             }
             Remediation::BranchProtection { description, .. } => {
-                body.push_str(&format!("- {description}\n"));
+                body.push_str(&format!("- {description} *(rule: `{rule_type}`)*\n"));
             }
         }
     }
 
-    body.push_str("\n---\n*This PR was automatically created by [multipush](https://github.com/multipush/multipush).*\n");
+    if let Some(source_md) = policy_source.render_markdown() {
+        body.push_str("\n### Source\n\n");
+        body.push_str(&source_md);
+    }
+
+    body.push_str("\n---\n*Created by [multipush](https://github.com/JackuB/multipush) — declarative policy-as-code for GitHub repos.*\n");
     body
 }
 
@@ -587,9 +608,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, true, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            true,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_created.len(), 2);
         assert!(result
@@ -607,9 +635,16 @@ mod tests {
             make_report_with_failures(&["org/a", "org/b", "org/c", "org/d", "org/e"], true);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, false, 2)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            2,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_created.len(), 2);
         assert_eq!(result.prs_limited, 3);
@@ -654,9 +689,16 @@ mod tests {
             policies: vec![],
         };
 
-        let result = execute(&report, &config, &provider, false, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_skipped.len(), 1);
         assert_eq!(result.prs_created.len(), 0);
@@ -679,9 +721,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha"], true);
         let config = default_config(); // default strategy is Update
 
-        let result = execute(&report, &config, &provider, false, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_updated.len(), 1);
         assert_eq!(result.prs_created.len(), 0);
@@ -694,9 +743,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha"], false);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, false, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_created.len(), 0);
         assert_eq!(result.prs_limited, 0);
@@ -798,9 +854,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
         let config = default_config();
 
-        let result = execute(&report, &config, &provider, false, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_errored.len(), 1);
         assert_eq!(result.prs_errored[0].repo_name, "org/alpha");
@@ -812,14 +875,17 @@ mod tests {
 
     #[test]
     fn generate_pr_body_format() {
-        let remediations = vec![Remediation::FileChanges {
-            description: "Create LICENSE file".to_string(),
-            changes: vec![FileChange {
-                path: "LICENSE".to_string(),
-                content: Some("MIT".to_string()),
-                message: "Add LICENSE".to_string(),
-            }],
-        }];
+        let remediations = vec![AttributedRemediation::new(
+            "ensure_file",
+            Remediation::FileChanges {
+                description: "Create LICENSE file".to_string(),
+                changes: vec![FileChange {
+                    path: "LICENSE".to_string(),
+                    content: Some("MIT".to_string()),
+                    message: "Add LICENSE".to_string(),
+                }],
+            },
+        )];
 
         let body = generate_pr_body(
             "require-license",
@@ -827,6 +893,7 @@ mod tests {
             &Severity::Error,
             "org/alpha",
             &remediations,
+            &PolicySourceInfo::default(),
         );
 
         assert!(body.contains("## Policy: require-license"));
@@ -834,8 +901,49 @@ mod tests {
         assert!(body.contains("**Severity:** error"));
         assert!(body.contains("**Repository:** org/alpha"));
         assert!(body.contains("Create LICENSE file"));
+        // rule_type is surfaced alongside the description.
+        assert!(body.contains("(rule: `ensure_file`)"));
         assert!(body.contains("`LICENSE` (create/update)"));
         assert!(body.contains("multipush"));
+        // Empty PolicySourceInfo suppresses the Source block entirely.
+        assert!(!body.contains("### Source"));
+    }
+
+    #[test]
+    fn generate_pr_body_includes_source_block_when_present() {
+        let remediations = vec![AttributedRemediation::new(
+            "ensure_file",
+            Remediation::FileChanges {
+                description: "Create CODEOWNERS".to_string(),
+                changes: vec![FileChange {
+                    path: ".github/CODEOWNERS".to_string(),
+                    content: Some("* @team\n".to_string()),
+                    message: "Add CODEOWNERS".to_string(),
+                }],
+            },
+        )];
+        let policy_source = PolicySourceInfo {
+            repo_url: Some("https://github.com/waratek/cml".to_string()),
+            commit_sha: Some("992aaab123456".to_string()),
+            workflow_run_url: Some("https://github.com/waratek/cml/actions/runs/42".to_string()),
+            workflow_name: Some("policy-enforcement".to_string()),
+            ..Default::default()
+        };
+
+        let body = generate_pr_body(
+            "codeowners-portal",
+            Some("Portal team's repos"),
+            &Severity::Error,
+            "waratek/portal",
+            &remediations,
+            &policy_source,
+        );
+
+        assert!(body.contains("### Source"));
+        assert!(body.contains("waratek/cml @ 992aaab"));
+        assert!(body.contains("/tree/992aaab123456"));
+        assert!(body.contains("workflow run (policy-enforcement)"));
+        assert!(body.contains("actions/runs/42"));
     }
 
     fn config_with_auto_merge() -> RootConfig {
@@ -869,9 +977,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha", "org/beta"], true);
         let config = config_with_auto_merge();
 
-        let result = execute(&report, &config, &provider, false, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_created.len(), 2);
         assert_eq!(provider.enable_auto_merge_calls.load(Ordering::SeqCst), 2);
@@ -883,9 +998,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha"], true);
         let config = config_with_auto_merge();
 
-        let result = execute(&report, &config, &provider, true, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            true,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_created.len(), 1);
         assert_eq!(provider.enable_auto_merge_calls.load(Ordering::SeqCst), 0);
@@ -984,9 +1106,16 @@ mod tests {
         let report = make_report_with_failures(&["org/alpha"], true);
         let config = config_with_auto_merge();
 
-        let result = execute(&report, &config, &provider, false, 10)
-            .await
-            .unwrap();
+        let result = execute(
+            &report,
+            &config,
+            &provider,
+            false,
+            10,
+            &PolicySourceInfo::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.prs_created.len(), 1);
         assert_eq!(provider.enable_auto_merge_calls.load(Ordering::SeqCst), 1);

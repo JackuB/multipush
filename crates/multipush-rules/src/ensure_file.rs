@@ -57,27 +57,31 @@ impl Rule for EnsureFileRule {
             .collect();
 
         // No file at any candidate path: same outcome regardless of mode —
-        // fail and (when content is known) offer to create the canonical one.
+        // fail, and offer to create the canonical one only when content is
+        // known. Without content (no `default_content` / `must_equal`), the
+        // rule deliberately emits `remediation: None` — discovery without a
+        // fix — so the executor reports it as non-compliant but does not try
+        // to open an empty PR.
         if existing.is_empty() {
             let detail = if paths.len() == 1 {
                 format!("File {} does not exist", paths[0])
             } else {
                 format!("No file found at any of: {}", paths.join(", "))
             };
-            let changes = match self.config.creation_body() {
-                Some(body) => vec![FileChange {
-                    path: canonical.clone(),
-                    content: Some(body.to_string()),
-                    message: format!("Create file {canonical}"),
-                }],
-                None => vec![],
-            };
+            let remediation = self
+                .config
+                .creation_body()
+                .map(|body| Remediation::FileChanges {
+                    description: format!("Create file {canonical}"),
+                    changes: vec![FileChange {
+                        path: canonical.clone(),
+                        content: Some(body.to_string()),
+                        message: format!("Create file {canonical}"),
+                    }],
+                });
             return Ok(RuleResult::Fail {
                 detail,
-                remediation: Some(Remediation::FileChanges {
-                    description: format!("Create file {canonical}"),
-                    changes,
-                }),
+                remediation,
             });
         }
 
@@ -292,6 +296,9 @@ mod tests {
 
     #[tokio::test]
     async fn missing_no_default_content_flags_only() {
+        // Discovery-only mode: rule reports FAIL but emits no remediation
+        // because we have no content to write. Executor should treat this as
+        // "report only" — no branch, no PR, no max-prs budget consumed.
         let provider = TestProvider::new();
         let rule = EnsureFileRule::new(EnsureFileConfig {
             path: Some("README.md".to_string()),
@@ -312,10 +319,10 @@ mod tests {
                 remediation,
             } => {
                 assert!(detail.contains("does not exist"));
-                match remediation.unwrap() {
-                    Remediation::FileChanges { changes, .. } => assert!(changes.is_empty()),
-                    other => panic!("expected FileChanges remediation, got {other:?}"),
-                }
+                assert!(
+                    remediation.is_none(),
+                    "expected no remediation, got {remediation:?}"
+                );
             }
             other => panic!("expected Fail, got {other:?}"),
         }

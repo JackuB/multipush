@@ -6,6 +6,6 @@ provider:
 policies:
   - recipe: codeowners
     params:
-      default_owner: "@platform-team"
+      default_content: "* @platform-team\n"
     targets:
       repos: "test-org/*"

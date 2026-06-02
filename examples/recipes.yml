@@ -13,10 +13,15 @@ provider:
   token: ${GITHUB_TOKEN}
 
 policies:
-  # CODEOWNERS — ensure every repo has a code ownership file
+  # CODEOWNERS — ensure every repo has a code ownership file.
+  # Both params are optional. With neither, the recipe is a discovery-only
+  # existence check (no PRs opened). Set `default_content` to auto-create a
+  # missing file; set `must_contain` to also require an existing file to
+  # mention a particular team.
   - recipe: codeowners
     params:
-      default_owner: "@my-org/platform-team"
+      default_content: "* @my-org/platform-team\n"
+      must_contain: "@my-org/platform-team"
     targets:
       repos: "${GITHUB_ORG}/*"
 
