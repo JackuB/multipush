@@ -493,8 +493,45 @@ impl Provider for GitHubProvider {
         .await
     }
 
-    async fn get_repo_settings(&self, _repo: &Repo) -> multipush_core::Result<RepoSettings> {
-        todo!("Implemented in apply mode session")
+    async fn get_repo_settings(&self, repo: &Repo) -> multipush_core::Result<RepoSettings> {
+        // Pulls the Repository payload directly via `client.get` rather than
+        // octocrab's typed `repos().get()` so we don't have to track changes
+        // to its `Repository` struct field set. We only care about a small
+        // subset of booleans and the default branch.
+        async {
+            self.check_rate_limit().await?;
+
+            let body: serde_json::Value = self
+                .client
+                .get(format!("/repos/{}/{}", repo.owner, repo.name), None::<&()>)
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            // GitHub omits some of these fields on legacy repos; default to
+            // GitHub's documented defaults rather than failing the whole run.
+            let bool_or = |key: &str, default: bool| {
+                body.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+            };
+            let default_branch = body
+                .get("default_branch")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&repo.default_branch)
+                .to_string();
+
+            Ok(RepoSettings {
+                has_issues: bool_or("has_issues", true),
+                has_wiki: bool_or("has_wiki", true),
+                has_projects: bool_or("has_projects", true),
+                allow_merge_commit: bool_or("allow_merge_commit", true),
+                allow_squash_merge: bool_or("allow_squash_merge", true),
+                allow_rebase_merge: bool_or("allow_rebase_merge", true),
+                delete_branch_on_merge: bool_or("delete_branch_on_merge", false),
+                allow_auto_merge: bool_or("allow_auto_merge", false),
+                default_branch,
+            })
+        }
+        .instrument(debug_span!("api", method = "get_repo_settings", repo = %repo.full_name))
+        .await
     }
 
     async fn find_open_pr(
@@ -1395,6 +1432,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.number, 102);
+    }
+
+    #[tokio::test]
+    async fn get_repo_settings_parses_repo_payload() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        // GitHub's repository payload includes far more than the fields we
+        // consume; supply a realistic subset and verify we pick out the
+        // booleans + default_branch correctly.
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1,
+                "name": "test-repo",
+                "full_name": "test-org/test-repo",
+                "default_branch": "trunk",
+                "has_issues": true,
+                "has_wiki": false,
+                "has_projects": true,
+                "allow_merge_commit": true,
+                "allow_squash_merge": false,
+                "allow_rebase_merge": true,
+                "delete_branch_on_merge": true,
+                "allow_auto_merge": false,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let settings = provider.get_repo_settings(&repo).await.unwrap();
+        assert_eq!(settings.default_branch, "trunk");
+        assert!(settings.has_issues);
+        assert!(!settings.has_wiki);
+        assert!(settings.delete_branch_on_merge);
+        assert!(!settings.allow_squash_merge);
+        assert!(!settings.allow_auto_merge);
+    }
+
+    #[tokio::test]
+    async fn get_repo_settings_defaults_missing_fields() {
+        // Older or legacy repo payloads omit some toggles; we must not blow
+        // up — fall back to GitHub's documented defaults.
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1,
+                "name": "test-repo",
+                "full_name": "test-org/test-repo",
+                "default_branch": "main",
+            })))
+            .mount(&server)
+            .await;
+
+        let settings = provider.get_repo_settings(&repo).await.unwrap();
+        assert_eq!(settings.default_branch, "main");
+        // delete_branch_on_merge defaults to false per GitHub docs.
+        assert!(!settings.delete_branch_on_merge);
+        // has_issues defaults to true for new repos.
+        assert!(settings.has_issues);
     }
 
     #[tokio::test]
