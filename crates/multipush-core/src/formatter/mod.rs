@@ -158,7 +158,7 @@ pub fn build_pr_action_map(
 }
 
 /// Compute the (action, pr_url) labels for a single (repo, policy) row in an
-/// apply table.
+/// **apply** table.
 ///
 /// Falls back to deriving a label from the outcome when there's no PR action
 /// recorded, so the table can distinguish:
@@ -167,7 +167,9 @@ pub fn build_pr_action_map(
 ///   doesn't know how to fix it; e.g. discovery-mode `ensure_file` with no
 ///   `default_content`).
 /// - `Limited (max-prs)` — FAIL with a real file remediation that the
-///   executor suppressed because the `--max-prs` budget was exhausted.
+///   executor suppressed because the `--max-prs` budget was exhausted. Only
+///   reached in apply mode — check has no budget concept and should use
+///   [`derive_check_action`] instead.
 /// - `-` — anything else (skipped, settings-only remediation handled in its
 ///   own table, etc.).
 pub fn derive_pr_action(
@@ -196,6 +198,103 @@ pub fn derive_pr_action(
             }
         }
         _ => ("-".to_string(), "-".to_string()),
+    }
+}
+
+/// Compute the Action label for a single (repo, policy) row in a **check**
+/// table. There is no action_map in check mode — the label answers "what
+/// would `apply` do here?" by inspecting the remediations the rule emitted.
+///
+/// Returns:
+/// - `Would create PR` if at least one remediation is a non-empty
+///   `FileChanges`.
+/// - `Would update settings` / `Would update protection` for the
+///   corresponding API-only remediations.
+/// - Both kinds of API remediations combine with `+` (e.g.
+///   `Would update settings + protection`); when a PR is also pending, the
+///   PR wins (apply will open a PR *and* PATCH settings, but the PR is the
+///   more reviewable action so it leads).
+/// - `Report only` for a FAIL with no remediation (the rule detected a
+///   problem it can't fix).
+/// - `-` for non-FAIL outcomes.
+pub fn derive_check_action(outcome: &RepoOutcome) -> String {
+    let RepoOutcome::Fail { remediations, .. } = outcome else {
+        return "-".to_string();
+    };
+
+    if remediations.is_empty() {
+        return "Report only".to_string();
+    }
+
+    let mut would_pr = false;
+    let mut would_settings = false;
+    let mut would_protection = false;
+    for r in remediations {
+        match &r.remediation {
+            Remediation::FileChanges { changes, .. } if !changes.is_empty() => would_pr = true,
+            Remediation::FileChanges { .. } => {}
+            Remediation::RepoSettings { .. } => would_settings = true,
+            Remediation::BranchProtection { .. } => would_protection = true,
+        }
+    }
+
+    if would_pr {
+        return "Would create PR".to_string();
+    }
+    match (would_settings, would_protection) {
+        (true, true) => "Would update settings + protection".to_string(),
+        (true, false) => "Would update settings".to_string(),
+        (false, true) => "Would update protection".to_string(),
+        // Only FileChanges-with-empty-changes remediations were present.
+        (false, false) => "Report only".to_string(),
+    }
+}
+
+/// Build the check-mode PR summary line: how many PRs `apply` would create
+/// if run against this report. Counts each (repo, policy) FAIL whose
+/// remediation list contains at least one non-empty `FileChanges`.
+pub fn format_pr_summary_for_check(report: &Report) -> String {
+    let mut would_create = 0usize;
+    for policy in &report.results {
+        for rr in &policy.repo_results {
+            if let RepoOutcome::Fail { remediations, .. } = &rr.outcome {
+                if remediations.iter().any(|r| {
+                    matches!(
+                        &r.remediation,
+                        Remediation::FileChanges { changes, .. } if !changes.is_empty()
+                    )
+                }) {
+                    would_create += 1;
+                }
+            }
+        }
+    }
+    if would_create == 0 {
+        "0 actions".to_string()
+    } else {
+        format!("{would_create} would create")
+    }
+}
+
+/// Build a settings-summary line for check mode using the planned actions
+/// returned by [`crate::engine::plan_apply_actions`]. Mirrors the shape of
+/// [`format_settings_summary`] so check output matches apply output.
+pub fn format_settings_summary_for_check(planned: &[crate::engine::SettingsAction]) -> String {
+    if planned.is_empty() {
+        "0 actions".to_string()
+    } else {
+        format!("{} would apply", planned.len())
+    }
+}
+
+/// Build a branch-protection summary line for check mode.
+pub fn format_branch_protection_summary_for_check(
+    planned: &[crate::engine::BranchProtectionAction],
+) -> String {
+    if planned.is_empty() {
+        "0 actions".to_string()
+    } else {
+        format!("{} would apply", planned.len())
     }
 }
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use tracing::{debug, error, info, info_span, warn};
 
+use super::plan::plan_apply_actions;
 use crate::config::{ExistingPrStrategy, RootConfig};
 use crate::formatter::{RepoOutcome, Report};
 use crate::model::{
@@ -107,17 +108,10 @@ pub async fn execute(
     let mut pr_counter: usize = 0;
     let mut prs_limited: usize = 0;
 
-    // Aggregate repo_settings patches per repo across all policies so we can
-    // issue one update_repo_settings call per repo regardless of how many
-    // policies contributed to it.
-    let mut settings_by_repo: HashMap<String, (Repo, RepoSettingsPatch, Vec<String>)> =
-        HashMap::new();
-
-    // Aggregate branch_protection patches per (repo, branch).
-    let mut protection_by_target: HashMap<
-        (String, String),
-        (Repo, BranchProtectionPatch, Vec<String>),
-    > = HashMap::new();
+    // Settings and branch-protection patches aggregate across policies, so do
+    // that work once up-front (the same routine the check formatter uses to
+    // preview what apply would do).
+    let (planned_settings, planned_protection) = plan_apply_actions(report);
 
     for policy_report in &report.results {
         let policy_name = &policy_report.policy_name;
@@ -129,36 +123,6 @@ pub async fn execute(
             };
 
             let repo = build_repo(&repo_result.repo_name, &repo_result.default_branch);
-
-            // Collect non-file patches separately; they don't flow through
-            // the PR pipeline.
-            for rem in all_remediations {
-                match &rem.remediation {
-                    Remediation::RepoSettings { patch, .. } => {
-                        let entry = settings_by_repo
-                            .entry(repo.full_name.clone())
-                            .or_insert_with(|| {
-                                (repo.clone(), RepoSettingsPatch::default(), Vec::new())
-                            });
-                        entry.1.merge(patch.clone());
-                        if !entry.2.contains(policy_name) {
-                            entry.2.push(policy_name.clone());
-                        }
-                    }
-                    Remediation::BranchProtection { branch, patch, .. } => {
-                        let entry = protection_by_target
-                            .entry((repo.full_name.clone(), branch.clone()))
-                            .or_insert_with(|| {
-                                (repo.clone(), BranchProtectionPatch::default(), Vec::new())
-                            });
-                        entry.1.merge(patch.clone());
-                        if !entry.2.contains(policy_name) {
-                            entry.2.push(policy_name.clone());
-                        }
-                    }
-                    Remediation::FileChanges { .. } => {}
-                }
-            }
 
             // Only run the PR flow if this (repo, policy) has actual file
             // changes to push. A rule may emit `FileChanges` with an empty
@@ -385,38 +349,27 @@ pub async fn execute(
     // Apply merged repo-settings patches.
     let mut settings_applied = Vec::new();
     let mut settings_errored = Vec::new();
-    for (_, (repo, patch, policy_names)) in settings_by_repo {
-        if patch.is_empty() {
-            continue;
-        }
+    for action in planned_settings {
+        let repo = build_repo(&action.repo_name, "");
         let _span = info_span!("apply_settings", repo = %repo.full_name).entered();
 
         if dry_run {
-            let json = serde_json::to_string_pretty(&patch)
+            let json = serde_json::to_string_pretty(&action.patch)
                 .unwrap_or_else(|_| "<unserializable>".to_string());
             info!(
                 repo = %repo.full_name,
                 "[dry-run] would update repo settings: {json}"
             );
-            settings_applied.push(SettingsAction {
-                repo_name: repo.full_name.clone(),
-                policy_names,
-                patch,
-                action: SettingsActionKind::DryRun,
-                error: None,
-            });
+            settings_applied.push(action);
             continue;
         }
 
-        match provider.update_repo_settings(&repo, &patch).await {
+        match provider.update_repo_settings(&repo, &action.patch).await {
             Ok(()) => {
                 info!(repo = %repo.full_name, "updated repo settings");
                 settings_applied.push(SettingsAction {
-                    repo_name: repo.full_name.clone(),
-                    policy_names,
-                    patch,
                     action: SettingsActionKind::Applied,
-                    error: None,
+                    ..action
                 });
             }
             Err(e) => {
@@ -426,11 +379,9 @@ pub async fn execute(
                     "failed to update repo settings"
                 );
                 settings_errored.push(SettingsAction {
-                    repo_name: repo.full_name.clone(),
-                    policy_names,
-                    patch,
                     action: SettingsActionKind::Error,
                     error: Some(e.to_string()),
+                    ..action
                 });
             }
         }
@@ -439,61 +390,46 @@ pub async fn execute(
     // Apply merged branch-protection patches.
     let mut branch_protection_applied = Vec::new();
     let mut branch_protection_errored = Vec::new();
-    for ((_repo_full_name, branch), (repo, patch, policy_names)) in protection_by_target {
-        if patch.is_empty() {
-            continue;
-        }
-        let _span = info_span!("apply_branch_protection", repo = %repo.full_name, branch = %branch)
-            .entered();
+    for action in planned_protection {
+        let repo = build_repo(&action.repo_name, "");
+        let _span =
+            info_span!("apply_branch_protection", repo = %repo.full_name, branch = %action.branch)
+                .entered();
 
         if dry_run {
-            let json = serde_json::to_string_pretty(&patch)
+            let json = serde_json::to_string_pretty(&action.patch)
                 .unwrap_or_else(|_| "<unserializable>".to_string());
             info!(
                 repo = %repo.full_name,
-                branch = %branch,
+                branch = %action.branch,
                 "[dry-run] would update branch protection: {json}"
             );
-            branch_protection_applied.push(BranchProtectionAction {
-                repo_name: repo.full_name.clone(),
-                branch: branch.clone(),
-                policy_names,
-                patch,
-                action: SettingsActionKind::DryRun,
-                error: None,
-            });
+            branch_protection_applied.push(action);
             continue;
         }
 
         match provider
-            .update_branch_protection(&repo, &branch, &patch)
+            .update_branch_protection(&repo, &action.branch, &action.patch)
             .await
         {
             Ok(()) => {
-                info!(repo = %repo.full_name, branch = %branch, "updated branch protection");
+                info!(repo = %repo.full_name, branch = %action.branch, "updated branch protection");
                 branch_protection_applied.push(BranchProtectionAction {
-                    repo_name: repo.full_name.clone(),
-                    branch: branch.clone(),
-                    policy_names,
-                    patch,
                     action: SettingsActionKind::Applied,
-                    error: None,
+                    ..action
                 });
             }
             Err(e) => {
                 error!(
                     repo = %repo.full_name,
-                    branch = %branch,
+                    branch = %action.branch,
                     error = %e,
                     "failed to update branch protection"
                 );
                 branch_protection_errored.push(BranchProtectionAction {
-                    repo_name: repo.full_name.clone(),
-                    branch: branch.clone(),
-                    policy_names,
-                    patch,
                     action: SettingsActionKind::Error,
                     error: Some(e.to_string()),
+                    ..action
                 });
             }
         }

@@ -154,7 +154,8 @@ Optional. Sets defaults applied to all policies.
 | `commit_author` | string | No | — | Git commit author name |
 | `pr_labels` | list of strings | No | `[]` | Labels to add to PRs |
 | `pr_draft` | bool | No | `false` | Create PRs as drafts |
-| `existing_pr` | `skip` \| `update` \| `recreate` | No | `update` | Strategy when a PR already exists |
+| `existing_pr` | `skip` \| `update` \| `recreate` | No | `update` | Strategy when an open PR is already present on the branch |
+| `auto_merge` | bool | No | `false` | Enable GitHub auto-merge on created PRs. Equivalent to `apply --auto-merge`. Requires the repo to allow auto-merge |
 
 ```yaml
 defaults:
@@ -253,12 +254,17 @@ targets:
 
 Rules use YAML tags to specify their type. Each rule is prefixed with `!` in the config.
 
-| Rule | Tag | Description |
-|---|---|---|
-| ensure_file | `!ensure_file` | Ensure a file exists (in any of several locations), optionally satisfying a content predicate |
-| ensure_json_key | `!ensure_json_key` | Ensure a key exists in a JSON file |
-| ensure_yaml_key | `!ensure_yaml_key` | Ensure a key exists in a YAML file |
-| file_matches | `!file_matches` | Check file content against a regex pattern |
+| Rule | Tag | Remediates via | Description |
+|---|---|---|---|
+| ensure_file | `!ensure_file` | PR | Ensure a file exists (in any of several locations), optionally satisfying a content predicate |
+| ensure_json_key | `!ensure_json_key` | PR | Ensure a key exists in a JSON file |
+| ensure_yaml_key | `!ensure_yaml_key` | PR | Ensure a key exists in a YAML file |
+| file_matches | `!file_matches` | — (report only) | Check file content against a regex pattern |
+| file_absent | `!file_absent` | PR | Ensure a file does **not** exist; remediates by deleting it |
+| repo_settings | `!repo_settings` | Direct PATCH | Enforce repository-level toggles (issues, wiki, merge strategies, auto-delete on merge, …) |
+| branch_protection | `!branch_protection` | Direct PATCH | Enforce branch protection on a specific branch (defaults to the repo's default branch) |
+
+Rules whose remediation type is "Direct PATCH" don't open PRs — multipush calls the GitHub API directly during `apply`. The corresponding rows show up in the table's *Repo settings updates* and *Branch protection updates* sections rather than the PR table.
 
 ### `!ensure_file`
 
@@ -278,11 +284,23 @@ At most one predicate (`must_contain` / `must_match` / `must_equal`) may be set.
 With no predicate, the file only has to exist. `default_content` is redundant
 with `must_equal` (which governs creation itself), so setting both is rejected.
 
+Empty or whitespace-only values for `default_content` / `must_contain` /
+`must_match` / `must_equal` are normalized to "unset" — recipe params that
+expand to an empty string don't silently turn the field off (`must_contain: ""`
+would otherwise match every file).
+
+`default_content` is also normalized to end with **exactly one trailing
+newline**. You can omit `\n` in configs and recipe params, and multipush will
+add it; doubled newlines collapse to one; recipe substitution that folds a
+literal `\n` into a space (a YAML quirk inside double-quoted strings) is
+corrected. `must_equal` is left verbatim so the equality predicate stays
+honest — mutating it would loop forever.
+
 ```yaml
 # Simplest: the file just has to exist; create it from default_content if absent.
 - !ensure_file
   path: CODEOWNERS
-  default_content: "* @platform-team\n"
+  default_content: "* @platform-team"
 ```
 
 **Multiple locations.** GitHub accepts some files (CODEOWNERS, LICENSE) in more
@@ -295,7 +313,22 @@ than one place. List them in `paths`; the rule passes if the file exists at
     - CODEOWNERS
     - .github/CODEOWNERS
     - docs/CODEOWNERS
-  default_content: "* @platform-team\n"
+  default_content: "* @platform-team"
+```
+
+**Discovery without auto-fix.** Omit `default_content` (and `must_equal`) to
+get a pure existence check. multipush flags every repo missing the file but
+won't open PRs — useful as a baseline layer alongside team-specific policies
+that know what content to write. Failing rows surface as `Report only` in the
+apply table and don't consume `--max-prs` budget.
+
+```yaml
+# Baseline: every repo must have CODEOWNERS somewhere. No content known.
+- !ensure_file
+  paths:
+    - CODEOWNERS
+    - .github/CODEOWNERS
+    - docs/CODEOWNERS
 ```
 
 **Content predicate plus a valid created file.** Because the check
@@ -311,8 +344,8 @@ auto-fix (multipush won't rewrite a hand-authored file).
     - CODEOWNERS
     - .github/CODEOWNERS
     - docs/CODEOWNERS
-  default_content: "* @acme/ops\n"   # created when the file is missing
-  must_contain: "@acme/ops"           # existing files must mention ops somewhere
+  default_content: "* @acme/ops"     # created when the file is missing
+  must_contain: "@acme/ops"          # existing files must mention ops somewhere
 ```
 
 ### `!ensure_json_key`
@@ -357,13 +390,79 @@ Same parameters as `!ensure_json_key`, but for YAML files.
   pattern: "^# .+"
 ```
 
+### `!file_absent`
+
+The mirror of `ensure_file`: assert that a file is **gone**. When the file
+exists, remediation is a delete-file PR.
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `path` | string | Yes | — | File path that must not exist |
+
+```yaml
+# Drop the legacy build config.
+- !file_absent
+  path: .travis.yml
+```
+
+### `!repo_settings`
+
+Enforce repository-level toggles. Each set field becomes part of a single
+`PATCH /repos/{owner}/{repo}` call during `apply` — no PR is opened. Unset
+fields are left alone. The `apply` table reports these under *Repo settings
+updates*.
+
+| Param | Type | Description |
+|---|---|---|
+| `has_issues` | bool | Enable/disable the Issues tab |
+| `has_wiki` | bool | Enable/disable the Wiki tab |
+| `has_projects` | bool | Enable/disable Projects |
+| `allow_merge_commit` | bool | Allow standard merge commits |
+| `allow_squash_merge` | bool | Allow squash merge |
+| `allow_rebase_merge` | bool | Allow rebase merge |
+| `delete_branch_on_merge` | bool | Auto-delete head branches after merge |
+| `allow_auto_merge` | bool | Allow GitHub's auto-merge button |
+| `default_branch` | string | Rename the default branch (rare; doesn't migrate refs) |
+
+```yaml
+# Tidy up branch lists across the org.
+- !repo_settings
+  delete_branch_on_merge: true
+  allow_auto_merge: true
+```
+
+### `!branch_protection`
+
+Enforce branch protection on a single branch. Like `!repo_settings`, this
+remediates via a direct API PATCH (no PR). The `apply` table reports these
+under *Branch protection updates*.
+
+| Param | Type | Description |
+|---|---|---|
+| `branch` | string | Branch to protect. Defaults to the repo's default branch when omitted |
+| `required_status_checks` | object | `{strict: bool, contexts: [string]}` |
+| `required_pull_request_reviews` | object | `{required_approving_review_count: int, dismiss_stale_reviews: bool, require_code_owner_reviews: bool}` |
+| `enforce_admins` | bool | Include admins in the protection rules |
+| `required_linear_history` | bool | Require a linear history (no merge commits) |
+| `allow_force_pushes` | bool | Permit force-pushes |
+| `allow_deletions` | bool | Permit branch deletion |
+
+```yaml
+- !branch_protection
+  required_pull_request_reviews:
+    required_approving_review_count: 1
+    require_code_owner_reviews: true
+  enforce_admins: true
+  required_linear_history: true
+```
+
 ## Recipes
 
 Recipes are reusable policy templates with configurable parameters. Use them in policies with the `recipe:` field.
 
 | Recipe | Description | Required Params | Optional Params |
 |---|---|---|---|
-| `codeowners` | Ensure CODEOWNERS file | `default_owner` | `mode` (default: `create_if_missing`) |
+| `codeowners` | Ensure CODEOWNERS file | — | `default_content`, `must_contain` |
 | `security-md` | Ensure SECURITY.md | `contact_email` | — |
 | `license` | Ensure LICENSE file | — | `license_type` (default: `MIT`), `author` |
 | `editorconfig` | Ensure .editorconfig | — | `indent_style` (default: `space`), `indent_size` (default: `2`) |
@@ -376,12 +475,50 @@ Recipes are reusable policy templates with configurable parameters. Use them in 
 policies:
   - recipe: codeowners
     params:
-      default_owner: "@platform-team"
+      default_content: "* @platform-team"
+      must_contain: "@platform-team"
     targets:
       repos: "my-org/*"
 ```
 
 Recipes expand into regular rules at load time. You can override `name`, `description`, `severity`, and `targets` on a recipe policy.
+
+### Layering recipes
+
+`codeowners` is designed to layer: omit both params for a pure discovery
+check, set `default_content` for auto-create, and set both to enforce that
+existing files mention a particular team. A typical org policy file uses
+one baseline that flags every missing CODEOWNERS, plus per-team policies
+that auto-create the right content for the repos they own.
+
+```yaml
+policies:
+  # 1. Baseline: every repo needs a CODEOWNERS *somewhere*. No content known
+  #    here, so this layer only reports — no PRs opened, no max-prs budget
+  #    consumed.
+  - name: codeowners-everywhere
+    severity: error
+    targets:
+      repos: "acme/*"
+    recipe: codeowners
+
+  # 2. Per-team: knows the content. Auto-creates missing files and FAILs any
+  #    existing file that doesn't mention the team.
+  - name: codeowners-portal
+    severity: error
+    targets:
+      repos:
+        - acme/portal
+        - acme/portal-*
+    recipe: codeowners
+    params:
+      default_content: "* @acme/portal"
+      must_contain: "@acme/portal"
+```
+
+The recipe checks all three GitHub-honored locations (`CODEOWNERS`,
+`.github/CODEOWNERS`, `docs/CODEOWNERS`); new files are created at the repo
+root.
 
 ### Parameter values
 
@@ -464,10 +601,66 @@ multipush apply -c config.yml --max-prs 5
 | `-f, --format` | Output format | `table` |
 | `-p, --policy` | Run only named policies (repeatable) | all |
 | `--concurrency` | Max concurrent repo evaluations | `10` |
+| `--auto-merge` | Enable auto-merge on created PRs (shortcut for `defaults.apply.auto_merge: true`) | — |
+| `--policy-source-url` | URL of the repo where the policy YAML lives; inlined into PR bodies under *Source*. Defaults to auto-detection from `GITHUB_*` env vars when running in Actions | auto |
 | `--fail-on` | Exit 1 if any result >= severity | `error` |
 | `--no-color` | Disable colors | — |
 | `-v` | Verbosity | errors only |
 | `-q, --quiet` | Suppress non-error output | — |
+
+#### PR body shape
+
+PRs opened by `apply` follow a fixed shape:
+
+```markdown
+## Policy: codeowners-portal
+
+Repos belonging to the Portal team
+
+**Severity:** error
+
+### Changes
+
+- Create file .github/CODEOWNERS *(rule: `ensure_file`)*
+  - `.github/CODEOWNERS` (create/update)
+
+### Source
+
+Policy defined in [acme/policies @ 992aaab](https://github.com/acme/policies/tree/992aaab123)
+Opened by [workflow run (policy-enforcement)](https://github.com/acme/policies/actions/runs/8123456789)
+
+---
+*Created by [multipush](https://github.com/JackuB/multipush) — declarative policy-as-code for GitHub repos.*
+```
+
+The **Source** block is auto-populated when multipush detects it's running
+under GitHub Actions (`GITHUB_ACTIONS=true`). It reads `GITHUB_SERVER_URL`,
+`GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_RUN_ID`, and `GITHUB_WORKFLOW` to
+link reviewers back to the exact commit of the policy repo and the workflow
+run that opened the PR. The block is suppressed entirely when no provenance
+is available.
+
+For runs outside Actions (cron, self-hosted, ad-hoc), pass
+`--policy-source-url https://example.com/your/policies` to populate the link
+manually.
+
+The target repo's name is **not** repeated in the body — GitHub already
+shows it in the PR header.
+
+#### Handling existing branches and closed PRs
+
+`apply` keys PRs by branch name (`{pr_prefix}/{policy-name}`, default
+`multipush/{policy-name}`). When you re-run after closing a PR:
+
+- If a PR is **open** on the branch, `defaults.apply.existing_pr` controls
+  the behavior (`update` is the default).
+- If a PR is **closed** but the branch still exists, multipush reuses the
+  branch, pushes any new commits needed, and opens a fresh PR.
+- If the branch is also gone, multipush creates everything from the base
+  SHA.
+
+This is idempotent: re-running with no policy changes either updates the
+existing PR in place or no-ops. Reviewers don't lose comment history.
 
 ### `validate`
 
@@ -568,7 +761,12 @@ jobs:
 | `command` | no | `check` | Subcommand: `check`, `apply`, `validate`, `list-repos`, `list-rules` |
 | `args` | no | `""` | Extra arguments appended to the command (e.g. `--dry-run --max-prs 5`) |
 | `token` | no | `${{ github.token }}` | Token used by multipush. Override for org-wide access |
-| `version` | no | `latest` | multipush release to install (e.g. `0.1.0`) |
+| `version` | no | `latest` | multipush release to install (e.g. `0.2.2`) |
+
+The action exposes `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_RUN_ID`, and
+`GITHUB_WORKFLOW` to multipush, so PRs opened from a workflow automatically
+link back to the policy repo at the commit that ran them. See
+[PR body shape](#pr-body-shape).
 
 ### Version pinning
 

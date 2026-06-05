@@ -3,21 +3,29 @@ use std::fmt::Write;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
-use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
+use multipush_core::engine::executor::{
+    ApplyReport, BranchProtectionAction, SettingsAction, SettingsActionKind,
+};
+use multipush_core::engine::plan_apply_actions;
 use multipush_core::formatter::{
-    build_pr_action_map, derive_pr_action, format_branch_protection_summary, format_pr_summary,
-    format_settings_summary, group_by_repo, has_branch_protection_actions, has_settings_actions,
-    Formatter, PolicyCounts, PolicyReport, RepoCounts, RepoOutcome, Report,
+    build_pr_action_map, derive_check_action, derive_pr_action, format_branch_protection_summary,
+    format_branch_protection_summary_for_check, format_pr_summary, format_pr_summary_for_check,
+    format_settings_summary, format_settings_summary_for_check, group_by_repo,
+    has_branch_protection_actions as has_apply_branch_protection_actions,
+    has_settings_actions as has_apply_settings_actions, Formatter, PolicyCounts, PolicyReport,
+    RepoCounts, RepoOutcome, Report,
 };
 
 #[derive(Tabled)]
-struct Row {
+struct CheckRow {
     #[tabled(rename = "Repository")]
     repo: String,
     #[tabled(rename = "Status")]
     status: String,
     #[tabled(rename = "Detail")]
     detail: String,
+    #[tabled(rename = "Action")]
+    action: String,
 }
 
 #[derive(Tabled)]
@@ -131,9 +139,15 @@ impl TableFormatter {
         }
     }
 
-    fn format_policy(&self, policy: &PolicyReport) -> String {
+    /// Render the per-policy header + body (4-col table) and the policy
+    /// summary line. `rows_for` builds the Tabled rows; this helper is shared
+    /// by check (CheckRow) and apply (ApplyRow) rendering.
+    fn render_policy_block<R: Tabled>(
+        &self,
+        policy: &PolicyReport,
+        rows_for: impl FnOnce(&PolicyReport) -> Vec<R>,
+    ) -> String {
         let mut out = String::new();
-
         let desc = policy
             .description
             .as_deref()
@@ -141,16 +155,7 @@ impl TableFormatter {
             .unwrap_or_default();
         writeln!(out, "Policy: {}{desc}", policy.policy_name).unwrap();
 
-        let rows: Vec<Row> = policy
-            .repo_results
-            .iter()
-            .map(|rr| Row {
-                repo: rr.repo_name.clone(),
-                status: self.format_status(&rr.outcome),
-                detail: Self::format_detail(&rr.outcome).to_string(),
-            })
-            .collect();
-
+        let rows = rows_for(policy);
         if rows.is_empty() {
             writeln!(out, "  (no repositories matched)").unwrap();
         } else {
@@ -163,7 +168,6 @@ impl TableFormatter {
             )
             .unwrap();
         }
-
         out
     }
 }
@@ -244,6 +248,71 @@ fn format_overview(report: &Report) -> String {
     out
 }
 
+fn render_settings_table(applied: &[SettingsAction], errored: &[SettingsAction]) -> String {
+    let mut rows: Vec<SettingsRow> = Vec::new();
+    for a in applied {
+        let label = match a.action {
+            SettingsActionKind::Applied => "settings updated",
+            SettingsActionKind::DryRun => "would update settings",
+            SettingsActionKind::Error => "error",
+        };
+        rows.push(SettingsRow {
+            repo: a.repo_name.clone(),
+            policies: a.policy_names.join(", "),
+            action: label.to_string(),
+            patch: format_patch(&a.patch),
+        });
+    }
+    for a in errored {
+        rows.push(SettingsRow {
+            repo: a.repo_name.clone(),
+            policies: a.policy_names.join(", "),
+            action: a
+                .error
+                .clone()
+                .map(|e| format!("error: {e}"))
+                .unwrap_or_else(|| "error".to_string()),
+            patch: format_patch(&a.patch),
+        });
+    }
+    Table::new(rows).with(Style::sharp()).to_string()
+}
+
+fn render_protection_table(
+    applied: &[BranchProtectionAction],
+    errored: &[BranchProtectionAction],
+) -> String {
+    let mut rows: Vec<BranchProtectionRow> = Vec::new();
+    for a in applied {
+        let label = match a.action {
+            SettingsActionKind::Applied => "protection updated",
+            SettingsActionKind::DryRun => "would update protection",
+            SettingsActionKind::Error => "error",
+        };
+        rows.push(BranchProtectionRow {
+            repo: a.repo_name.clone(),
+            branch: a.branch.clone(),
+            policies: a.policy_names.join(", "),
+            action: label.to_string(),
+            patch: format_branch_protection_patch(&a.patch),
+        });
+    }
+    for a in errored {
+        rows.push(BranchProtectionRow {
+            repo: a.repo_name.clone(),
+            branch: a.branch.clone(),
+            policies: a.policy_names.join(", "),
+            action: a
+                .error
+                .clone()
+                .map(|e| format!("error: {e}"))
+                .unwrap_or_else(|| "error".to_string()),
+            patch: format_branch_protection_patch(&a.patch),
+        });
+    }
+    Table::new(rows).with(Style::sharp()).to_string()
+}
+
 impl Formatter for TableFormatter {
     fn name(&self) -> &str {
         "table"
@@ -251,18 +320,49 @@ impl Formatter for TableFormatter {
 
     fn format(&self, report: &Report) -> multipush_core::Result<String> {
         let mut out = String::new();
+        let (planned_settings, planned_protection) = plan_apply_actions(report);
 
         for (i, policy) in report.results.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            out.push_str(&self.format_policy(policy));
+            out.push_str(&self.render_policy_block(policy, |p| {
+                p.repo_results
+                    .iter()
+                    .map(|rr| CheckRow {
+                        repo: rr.repo_name.clone(),
+                        status: self.format_status(&rr.outcome),
+                        detail: Self::format_detail(&rr.outcome).to_string(),
+                        action: derive_check_action(&rr.outcome),
+                    })
+                    .collect()
+            }));
+        }
+
+        if !planned_settings.is_empty() {
+            out.push('\n');
+            writeln!(out, "Repo settings updates:").unwrap();
+            writeln!(out, "{}", render_settings_table(&planned_settings, &[])).unwrap();
+        }
+
+        if !planned_protection.is_empty() {
+            out.push('\n');
+            writeln!(out, "Branch protection updates:").unwrap();
+            writeln!(out, "{}", render_protection_table(&planned_protection, &[])).unwrap();
         }
 
         if !report.results.is_empty() {
             out.push('\n');
         }
         out.push_str(&format_overview(report));
+        write!(
+            out,
+            "\nPRs:               {}\nSettings:          {}\nBranch protection: {}",
+            format_pr_summary_for_check(report),
+            format_settings_summary_for_check(&planned_settings),
+            format_branch_protection_summary_for_check(&planned_protection),
+        )
+        .unwrap();
 
         Ok(out)
     }
@@ -328,114 +428,53 @@ impl Formatter for TableFormatter {
             if i > 0 {
                 out.push('\n');
             }
-
-            let desc = policy
-                .description
-                .as_deref()
-                .map(|d| format!("  {d}"))
-                .unwrap_or_default();
-            writeln!(out, "Policy: {}{desc}", policy.policy_name).unwrap();
-
-            let rows: Vec<ApplyRow> = policy
-                .repo_results
-                .iter()
-                .map(|rr| {
-                    let (action_label, pr_url) = derive_pr_action(
-                        &action_map,
-                        &rr.repo_name,
-                        &policy.policy_name,
-                        &rr.outcome,
-                    );
-
-                    ApplyRow {
-                        repo: rr.repo_name.clone(),
-                        status: self.format_status(&rr.outcome),
-                        action: action_label,
-                        pr: pr_url,
-                    }
-                })
-                .collect();
-
-            if rows.is_empty() {
-                writeln!(out, "  (no repositories matched)").unwrap();
-            } else {
-                let table = Table::new(rows).with(Style::sharp()).to_string();
-                writeln!(out, "{table}").unwrap();
-                writeln!(
-                    out,
-                    "Policy summary: {}",
-                    format_counts_line(&PolicyCounts::from_policy(policy))
-                )
-                .unwrap();
-            }
+            out.push_str(&self.render_policy_block(policy, |p| {
+                p.repo_results
+                    .iter()
+                    .map(|rr| {
+                        let (action_label, pr_url) = derive_pr_action(
+                            &action_map,
+                            &rr.repo_name,
+                            &p.policy_name,
+                            &rr.outcome,
+                        );
+                        ApplyRow {
+                            repo: rr.repo_name.clone(),
+                            status: self.format_status(&rr.outcome),
+                            action: action_label,
+                            pr: pr_url,
+                        }
+                    })
+                    .collect()
+            }));
         }
 
-        if has_settings_actions(apply_report) {
+        if has_apply_settings_actions(apply_report) {
             out.push('\n');
             writeln!(out, "Repo settings updates:").unwrap();
-            let mut rows: Vec<SettingsRow> = Vec::new();
-            for a in &apply_report.settings_applied {
-                let label = match a.action {
-                    SettingsActionKind::Applied => "settings updated",
-                    SettingsActionKind::DryRun => "would update settings",
-                    SettingsActionKind::Error => "error",
-                };
-                rows.push(SettingsRow {
-                    repo: a.repo_name.clone(),
-                    policies: a.policy_names.join(", "),
-                    action: label.to_string(),
-                    patch: format_patch(&a.patch),
-                });
-            }
-            for a in &apply_report.settings_errored {
-                rows.push(SettingsRow {
-                    repo: a.repo_name.clone(),
-                    policies: a.policy_names.join(", "),
-                    action: a
-                        .error
-                        .clone()
-                        .map(|e| format!("error: {e}"))
-                        .unwrap_or_else(|| "error".to_string()),
-                    patch: format_patch(&a.patch),
-                });
-            }
-            let table = Table::new(rows).with(Style::sharp()).to_string();
-            writeln!(out, "{table}").unwrap();
+            writeln!(
+                out,
+                "{}",
+                render_settings_table(
+                    &apply_report.settings_applied,
+                    &apply_report.settings_errored,
+                )
+            )
+            .unwrap();
         }
 
-        if has_branch_protection_actions(apply_report) {
+        if has_apply_branch_protection_actions(apply_report) {
             out.push('\n');
             writeln!(out, "Branch protection updates:").unwrap();
-            let mut rows: Vec<BranchProtectionRow> = Vec::new();
-            for a in &apply_report.branch_protection_applied {
-                let label = match a.action {
-                    SettingsActionKind::Applied => "protection updated",
-                    SettingsActionKind::DryRun => "would update protection",
-                    SettingsActionKind::Error => "error",
-                };
-                rows.push(BranchProtectionRow {
-                    repo: a.repo_name.clone(),
-                    branch: a.branch.clone(),
-                    policies: a.policy_names.join(", "),
-                    action: label.to_string(),
-                    patch: format_branch_protection_patch(&a.patch),
-                });
-            }
-            for a in &apply_report.branch_protection_errored {
-                rows.push(BranchProtectionRow {
-                    repo: a.repo_name.clone(),
-                    branch: a.branch.clone(),
-                    policies: a.policy_names.join(", "),
-                    action: a
-                        .error
-                        .clone()
-                        .map(|e| format!("error: {e}"))
-                        .unwrap_or_else(|| "error".to_string()),
-                    patch: format_branch_protection_patch(&a.patch),
-                });
-            }
-            let table = Table::new(rows).with(Style::sharp()).to_string();
-            writeln!(out, "{table}").unwrap();
+            writeln!(
+                out,
+                "{}",
+                render_protection_table(
+                    &apply_report.branch_protection_applied,
+                    &apply_report.branch_protection_errored,
+                )
+            )
+            .unwrap();
         }
 
         if !report.results.is_empty() {
@@ -468,7 +507,8 @@ mod tests {
     use super::*;
     use multipush_core::engine::executor::{PrAction, PrActionKind};
     use multipush_core::formatter::{RepoResult, Summary};
-    use multipush_core::model::{PrState, PullRequest, Severity};
+    use multipush_core::model::{PrState, PullRequest, RepoSettingsPatch, Severity};
+    use multipush_core::rule::{AttributedRemediation, Remediation};
 
     fn make_report(policies: Vec<PolicyReport>, summary: Summary) -> Report {
         Report {
@@ -535,6 +575,9 @@ mod tests {
         assert!(output.contains("FAIL"));
         assert!(output.contains("SKIP"));
         assert!(output.contains("ERROR"));
+        // Check now exposes an Action column derived from the outcome.
+        assert!(output.contains("Action"));
+        assert!(output.contains("Report only"));
         assert!(output.contains("Policy summary: 1 pass, 1 fail, 1 skip, 1 error (50.0% pass)"));
         assert!(output.contains("Overview"));
         assert!(output.contains("Pass:         1"));
@@ -542,6 +585,10 @@ mod tests {
         assert!(output.contains("Skip:         1"));
         assert!(output.contains("Error:        1"));
         assert!(output.contains("Success rate: 50.0%  (1 pass / 2 evaluated)"));
+        // Summary footer parity with apply.
+        assert!(output.contains("PRs:               0 actions"));
+        assert!(output.contains("Settings:          0 actions"));
+        assert!(output.contains("Branch protection: 0 actions"));
     }
 
     /// Regression: with color enabled, ANSI escapes in the Status cell used to
@@ -854,5 +901,53 @@ mod tests {
         assert!(output.contains("https://github.com/org/beta/pull/7"));
         assert!(output.contains("PRs:               1 created"));
         assert!(output.contains("Success rate: 50.0%  (1 pass / 2 evaluated)"));
+    }
+
+    #[test]
+    fn check_surfaces_planned_settings_and_pr_action() {
+        let remediation = AttributedRemediation::new(
+            "repo_settings",
+            Remediation::RepoSettings {
+                description: "delete branches on merge".to_string(),
+                patch: RepoSettingsPatch {
+                    delete_branch_on_merge: Some(true),
+                    ..Default::default()
+                },
+            },
+        );
+        let report = make_report(
+            vec![PolicyReport {
+                policy_name: "delete-head-branches".to_string(),
+                description: None,
+                severity: Severity::Warning,
+                repo_results: vec![RepoResult {
+                    repo_name: "org/a".to_string(),
+                    default_branch: "main".to_string(),
+                    outcome: RepoOutcome::Fail {
+                        detail: "missing".to_string(),
+                        remediations: vec![remediation],
+                    },
+                }],
+            }],
+            Summary {
+                total_repos: 1,
+                passing: 0,
+                failing: 1,
+                skipped: 0,
+                errors: 0,
+            },
+        );
+
+        let formatter = TableFormatter::with_color(false);
+        let output = formatter.format(&report).unwrap();
+
+        // Per-policy table shows the planned action.
+        assert!(output.contains("Would update settings"));
+        // Dedicated sub-table for settings updates.
+        assert!(output.contains("Repo settings updates:"));
+        assert!(output.contains("would update settings"));
+        assert!(output.contains("\"delete_branch_on_merge\":true"));
+        // Footer summary mirrors apply.
+        assert!(output.contains("Settings:          1 would apply"));
     }
 }

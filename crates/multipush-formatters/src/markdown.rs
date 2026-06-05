@@ -1,10 +1,16 @@
 use std::fmt::Write;
 
-use multipush_core::engine::executor::{ApplyReport, SettingsActionKind};
+use multipush_core::engine::executor::{
+    ApplyReport, BranchProtectionAction, SettingsAction, SettingsActionKind,
+};
+use multipush_core::engine::plan_apply_actions;
 use multipush_core::formatter::{
-    build_pr_action_map, derive_pr_action, format_branch_protection_summary, format_pr_summary,
-    format_settings_summary, group_by_repo, has_branch_protection_actions, has_settings_actions,
-    Formatter, PolicyCounts, PolicyReport, RepoCounts, RepoOutcome, Report,
+    build_pr_action_map, derive_check_action, derive_pr_action, format_branch_protection_summary,
+    format_branch_protection_summary_for_check, format_pr_summary, format_pr_summary_for_check,
+    format_settings_summary, format_settings_summary_for_check, group_by_repo,
+    has_branch_protection_actions as has_apply_branch_protection_actions,
+    has_settings_actions as has_apply_settings_actions, Formatter, PolicyCounts, PolicyReport,
+    RepoCounts, RepoOutcome, Report,
 };
 
 pub struct MarkdownFormatter;
@@ -30,45 +36,6 @@ impl MarkdownFormatter {
             RepoOutcome::Skip { reason } => reason,
             RepoOutcome::Error { message } => message,
         }
-    }
-
-    fn format_policy_check(&self, policy: &PolicyReport) -> String {
-        let mut out = String::new();
-
-        writeln!(out, "## Policy: {}", policy.policy_name).unwrap();
-        if let Some(desc) = &policy.description {
-            writeln!(out, "> {desc}").unwrap();
-        }
-        writeln!(out).unwrap();
-
-        if policy.repo_results.is_empty() {
-            writeln!(out, "*(no repositories matched)*").unwrap();
-            return out;
-        }
-
-        writeln!(out, "| Repository | Status | Detail |").unwrap();
-        writeln!(out, "|---|---|---|").unwrap();
-
-        for rr in &policy.repo_results {
-            writeln!(
-                out,
-                "| {} | {} | {} |",
-                rr.repo_name,
-                Self::status_label(&rr.outcome),
-                Self::detail(&rr.outcome),
-            )
-            .unwrap();
-        }
-
-        writeln!(out).unwrap();
-        writeln!(
-            out,
-            "**Policy summary:** {}",
-            format_counts_line(&PolicyCounts::from_policy(policy)),
-        )
-        .unwrap();
-
-        out
     }
 }
 
@@ -145,6 +112,92 @@ fn format_overview(report: &Report) -> String {
     out
 }
 
+fn render_policy_header(policy: &PolicyReport, out: &mut String) {
+    writeln!(out, "## Policy: {}", policy.policy_name).unwrap();
+    if let Some(desc) = &policy.description {
+        writeln!(out, "> {desc}").unwrap();
+    }
+    writeln!(out).unwrap();
+}
+
+fn render_settings_section(
+    applied: &[SettingsAction],
+    errored: &[SettingsAction],
+    out: &mut String,
+) {
+    writeln!(out, "## Repo settings updates\n").unwrap();
+    writeln!(out, "| Repository | Policies | Action | Patch |").unwrap();
+    writeln!(out, "|---|---|---|---|").unwrap();
+    for a in applied {
+        let label = match a.action {
+            SettingsActionKind::Applied => "settings updated",
+            SettingsActionKind::DryRun => "would update settings",
+            SettingsActionKind::Error => "error",
+        };
+        writeln!(
+            out,
+            "| {} | {} | {} | `{}` |",
+            a.repo_name,
+            a.policy_names.join(", "),
+            label,
+            serde_json::to_string(&a.patch).unwrap_or_default(),
+        )
+        .unwrap();
+    }
+    for a in errored {
+        writeln!(
+            out,
+            "| {} | {} | error: {} | `{}` |",
+            a.repo_name,
+            a.policy_names.join(", "),
+            a.error.as_deref().unwrap_or("unknown"),
+            serde_json::to_string(&a.patch).unwrap_or_default(),
+        )
+        .unwrap();
+    }
+    out.push('\n');
+}
+
+fn render_protection_section(
+    applied: &[BranchProtectionAction],
+    errored: &[BranchProtectionAction],
+    out: &mut String,
+) {
+    writeln!(out, "## Branch protection updates\n").unwrap();
+    writeln!(out, "| Repository | Branch | Policies | Action | Patch |").unwrap();
+    writeln!(out, "|---|---|---|---|---|").unwrap();
+    for a in applied {
+        let label = match a.action {
+            SettingsActionKind::Applied => "protection updated",
+            SettingsActionKind::DryRun => "would update protection",
+            SettingsActionKind::Error => "error",
+        };
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | `{}` |",
+            a.repo_name,
+            a.branch,
+            a.policy_names.join(", "),
+            label,
+            serde_json::to_string(&a.patch).unwrap_or_default(),
+        )
+        .unwrap();
+    }
+    for a in errored {
+        writeln!(
+            out,
+            "| {} | {} | {} | error: {} | `{}` |",
+            a.repo_name,
+            a.branch,
+            a.policy_names.join(", "),
+            a.error.as_deref().unwrap_or("unknown"),
+            serde_json::to_string(&a.patch).unwrap_or_default(),
+        )
+        .unwrap();
+    }
+    out.push('\n');
+}
+
 impl Default for MarkdownFormatter {
     fn default() -> Self {
         Self::new()
@@ -158,13 +211,61 @@ impl Formatter for MarkdownFormatter {
 
     fn format(&self, report: &Report) -> multipush_core::Result<String> {
         let mut out = String::from("# multipush Report\n\n");
+        let (planned_settings, planned_protection) = plan_apply_actions(report);
 
         for policy in &report.results {
-            out.push_str(&self.format_policy_check(policy));
+            render_policy_header(policy, &mut out);
+
+            if policy.repo_results.is_empty() {
+                writeln!(out, "*(no repositories matched)*").unwrap();
+                out.push('\n');
+                continue;
+            }
+
+            writeln!(out, "| Repository | Status | Detail | Action |").unwrap();
+            writeln!(out, "|---|---|---|---|").unwrap();
+            for rr in &policy.repo_results {
+                writeln!(
+                    out,
+                    "| {} | {} | {} | {} |",
+                    rr.repo_name,
+                    Self::status_label(&rr.outcome),
+                    Self::detail(&rr.outcome),
+                    derive_check_action(&rr.outcome),
+                )
+                .unwrap();
+            }
+            writeln!(out).unwrap();
+            writeln!(
+                out,
+                "**Policy summary:** {}",
+                format_counts_line(&PolicyCounts::from_policy(policy)),
+            )
+            .unwrap();
             out.push('\n');
         }
 
+        if !planned_settings.is_empty() {
+            render_settings_section(&planned_settings, &[], &mut out);
+        }
+        if !planned_protection.is_empty() {
+            render_protection_section(&planned_protection, &[], &mut out);
+        }
+
         out.push_str(&format_overview(report));
+        writeln!(out, "- PRs: {}", format_pr_summary_for_check(report)).unwrap();
+        writeln!(
+            out,
+            "- Settings: {}",
+            format_settings_summary_for_check(&planned_settings)
+        )
+        .unwrap();
+        write!(
+            out,
+            "- Branch protection: {}",
+            format_branch_protection_summary_for_check(&planned_protection),
+        )
+        .unwrap();
 
         Ok(out)
     }
@@ -212,11 +313,7 @@ impl Formatter for MarkdownFormatter {
         let mut out = String::from("# multipush Apply Report\n\n");
 
         for policy in &report.results {
-            writeln!(out, "## Policy: {}", policy.policy_name).unwrap();
-            if let Some(desc) = &policy.description {
-                writeln!(out, "> {desc}").unwrap();
-            }
-            writeln!(out).unwrap();
+            render_policy_header(policy, &mut out);
 
             if policy.repo_results.is_empty() {
                 writeln!(out, "*(no repositories matched)*").unwrap();
@@ -253,74 +350,20 @@ impl Formatter for MarkdownFormatter {
             out.push('\n');
         }
 
-        if has_settings_actions(apply_report) {
-            writeln!(out, "## Repo settings updates\n").unwrap();
-            writeln!(out, "| Repository | Policies | Action | Patch |").unwrap();
-            writeln!(out, "|---|---|---|---|").unwrap();
-            for a in &apply_report.settings_applied {
-                let label = match a.action {
-                    SettingsActionKind::Applied => "settings updated",
-                    SettingsActionKind::DryRun => "would update settings",
-                    SettingsActionKind::Error => "error",
-                };
-                writeln!(
-                    out,
-                    "| {} | {} | {} | `{}` |",
-                    a.repo_name,
-                    a.policy_names.join(", "),
-                    label,
-                    serde_json::to_string(&a.patch).unwrap_or_default(),
-                )
-                .unwrap();
-            }
-            for a in &apply_report.settings_errored {
-                writeln!(
-                    out,
-                    "| {} | {} | error: {} | `{}` |",
-                    a.repo_name,
-                    a.policy_names.join(", "),
-                    a.error.as_deref().unwrap_or("unknown"),
-                    serde_json::to_string(&a.patch).unwrap_or_default(),
-                )
-                .unwrap();
-            }
-            out.push('\n');
+        if has_apply_settings_actions(apply_report) {
+            render_settings_section(
+                &apply_report.settings_applied,
+                &apply_report.settings_errored,
+                &mut out,
+            );
         }
 
-        if has_branch_protection_actions(apply_report) {
-            writeln!(out, "## Branch protection updates\n").unwrap();
-            writeln!(out, "| Repository | Branch | Policies | Action | Patch |").unwrap();
-            writeln!(out, "|---|---|---|---|---|").unwrap();
-            for a in &apply_report.branch_protection_applied {
-                let label = match a.action {
-                    SettingsActionKind::Applied => "protection updated",
-                    SettingsActionKind::DryRun => "would update protection",
-                    SettingsActionKind::Error => "error",
-                };
-                writeln!(
-                    out,
-                    "| {} | {} | {} | {} | `{}` |",
-                    a.repo_name,
-                    a.branch,
-                    a.policy_names.join(", "),
-                    label,
-                    serde_json::to_string(&a.patch).unwrap_or_default(),
-                )
-                .unwrap();
-            }
-            for a in &apply_report.branch_protection_errored {
-                writeln!(
-                    out,
-                    "| {} | {} | {} | error: {} | `{}` |",
-                    a.repo_name,
-                    a.branch,
-                    a.policy_names.join(", "),
-                    a.error.as_deref().unwrap_or("unknown"),
-                    serde_json::to_string(&a.patch).unwrap_or_default(),
-                )
-                .unwrap();
-            }
-            out.push('\n');
+        if has_apply_branch_protection_actions(apply_report) {
+            render_protection_section(
+                &apply_report.branch_protection_applied,
+                &apply_report.branch_protection_errored,
+                &mut out,
+            );
         }
 
         out.push_str(&format_overview(&apply_report.report));
@@ -342,7 +385,8 @@ mod tests {
     use super::*;
     use multipush_core::engine::executor::{PrAction, PrActionKind};
     use multipush_core::formatter::{RepoResult, Summary};
-    use multipush_core::model::{PrState, PullRequest, Severity};
+    use multipush_core::model::{PrState, PullRequest, RepoSettingsPatch, Severity};
+    use multipush_core::rule::{AttributedRemediation, Remediation};
 
     fn make_check_report() -> Report {
         Report {
@@ -401,8 +445,12 @@ mod tests {
         assert!(output.starts_with("# multipush Report"));
         assert!(output.contains("## Policy: codeowners-required"));
         assert!(output.contains("> All repos must have a CODEOWNERS file"));
-        assert!(output.contains("| acme/api-gateway | PASS | File CODEOWNERS exists |"));
-        assert!(output.contains("| acme/web-frontend | FAIL | File CODEOWNERS does not exist |"));
+        // Check now carries a 4th Action column.
+        assert!(output.contains("| Repository | Status | Detail | Action |"));
+        assert!(output.contains("| acme/api-gateway | PASS | File CODEOWNERS exists | - |"));
+        assert!(output.contains(
+            "| acme/web-frontend | FAIL | File CODEOWNERS does not exist | Report only |"
+        ));
         assert!(
             output.contains("**Policy summary:** 1 pass, 1 fail, 0 skip, 0 errors (50.0% pass)")
         );
@@ -410,6 +458,10 @@ mod tests {
         assert!(output.contains("- Policies: 1"));
         assert!(output.contains("- Repositories: 2"));
         assert!(output.contains("- **Success rate:** 50.0% (1 pass / 2 evaluated)"));
+        // Footer parity with apply.
+        assert!(output.contains("- PRs: 0 actions"));
+        assert!(output.contains("- Settings: 0 actions"));
+        assert!(output.contains("- Branch protection: 0 actions"));
     }
 
     #[test]
@@ -449,5 +501,50 @@ mod tests {
         assert!(output.contains("| acme/api-gateway | PASS | - | - |"));
         assert!(output.contains("| acme/web-frontend | FAIL | PR created | https://github.com/acme/web-frontend/pull/42 |"));
         assert!(output.contains("PRs: 1 created"));
+    }
+
+    #[test]
+    fn markdown_check_renders_settings_section() {
+        let remediation = AttributedRemediation::new(
+            "repo_settings",
+            Remediation::RepoSettings {
+                description: "delete branches".to_string(),
+                patch: RepoSettingsPatch {
+                    delete_branch_on_merge: Some(true),
+                    ..Default::default()
+                },
+            },
+        );
+        let report = Report {
+            results: vec![PolicyReport {
+                policy_name: "delete-head-branches".to_string(),
+                description: None,
+                severity: Severity::Warning,
+                repo_results: vec![RepoResult {
+                    repo_name: "org/a".to_string(),
+                    default_branch: "main".to_string(),
+                    outcome: RepoOutcome::Fail {
+                        detail: "missing".to_string(),
+                        remediations: vec![remediation],
+                    },
+                }],
+            }],
+            summary: Summary {
+                total_repos: 1,
+                passing: 0,
+                failing: 1,
+                skipped: 0,
+                errors: 0,
+            },
+        };
+
+        let formatter = MarkdownFormatter::new();
+        let output = formatter.format(&report).unwrap();
+
+        assert!(output.contains("| Repository | Status | Detail | Action |"));
+        assert!(output.contains("Would update settings"));
+        assert!(output.contains("## Repo settings updates"));
+        assert!(output.contains("would update settings"));
+        assert!(output.contains("- Settings: 1 would apply"));
     }
 }
