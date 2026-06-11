@@ -2,7 +2,9 @@ use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::executor::{ApplyReport, PrAction, PrActionKind, SettingsActionKind};
+use crate::engine::executor::{
+    ApplyReport, AutolinkAction, PrAction, PrActionKind, SettingsActionKind,
+};
 use crate::model::Severity;
 use crate::rule::{AttributedRemediation, Remediation};
 use crate::Result;
@@ -229,24 +231,35 @@ pub fn derive_check_action(outcome: &RepoOutcome) -> String {
     let mut would_pr = false;
     let mut would_settings = false;
     let mut would_protection = false;
+    let mut would_autolinks = false;
     for r in remediations {
         match &r.remediation {
             Remediation::FileChanges { changes, .. } if !changes.is_empty() => would_pr = true,
             Remediation::FileChanges { .. } => {}
             Remediation::RepoSettings { .. } => would_settings = true,
             Remediation::BranchProtection { .. } => would_protection = true,
+            Remediation::Autolink { .. } => would_autolinks = true,
         }
     }
 
     if would_pr {
         return "Would create PR".to_string();
     }
-    match (would_settings, would_protection) {
-        (true, true) => "Would update settings + protection".to_string(),
-        (true, false) => "Would update settings".to_string(),
-        (false, true) => "Would update protection".to_string(),
+    let mut parts = Vec::new();
+    if would_settings {
+        parts.push("settings");
+    }
+    if would_protection {
+        parts.push("protection");
+    }
+    if would_autolinks {
+        parts.push("autolinks");
+    }
+    if parts.is_empty() {
         // Only FileChanges-with-empty-changes remediations were present.
-        (false, false) => "Report only".to_string(),
+        "Report only".to_string()
+    } else {
+        format!("Would update {}", parts.join(" + "))
     }
 }
 
@@ -291,6 +304,15 @@ pub fn format_settings_summary_for_check(planned: &[crate::engine::SettingsActio
 pub fn format_branch_protection_summary_for_check(
     planned: &[crate::engine::BranchProtectionAction],
 ) -> String {
+    if planned.is_empty() {
+        "0 actions".to_string()
+    } else {
+        format!("{} would apply", planned.len())
+    }
+}
+
+/// Build an autolinks summary line for check mode.
+pub fn format_autolinks_summary_for_check(planned: &[AutolinkAction]) -> String {
     if planned.is_empty() {
         "0 actions".to_string()
     } else {
@@ -426,6 +448,43 @@ pub fn format_branch_protection_summary(report: &ApplyReport) -> String {
 /// True if the apply report has any branch-protection actions.
 pub fn has_branch_protection_actions(report: &ApplyReport) -> bool {
     !report.branch_protection_applied.is_empty() || !report.branch_protection_errored.is_empty()
+}
+
+/// Build the autolinks-action summary line for apply reports.
+pub fn format_autolinks_summary(report: &ApplyReport) -> String {
+    let applied = report
+        .autolinks_applied
+        .iter()
+        .filter(|a| a.action == SettingsActionKind::Applied)
+        .count();
+    let would_apply = report
+        .autolinks_applied
+        .iter()
+        .filter(|a| a.action == SettingsActionKind::DryRun)
+        .count();
+    let errored = report.autolinks_errored.len();
+
+    let mut parts = Vec::new();
+    if applied > 0 {
+        parts.push(format!("{applied} applied"));
+    }
+    if would_apply > 0 {
+        parts.push(format!("{would_apply} would apply"));
+    }
+    if errored > 0 {
+        parts.push(format!("{errored} errored"));
+    }
+
+    if parts.is_empty() {
+        "0 actions".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// True if the apply report has any autolink actions.
+pub fn has_autolinks_actions(report: &ApplyReport) -> bool {
+    !report.autolinks_applied.is_empty() || !report.autolinks_errored.is_empty()
 }
 
 /// Renders a [`Report`] or [`ApplyReport`] into a human-readable string.

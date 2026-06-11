@@ -1,13 +1,15 @@
 use std::fmt::Write;
 
 use multipush_core::engine::executor::{
-    ApplyReport, BranchProtectionAction, SettingsAction, SettingsActionKind,
+    ApplyReport, AutolinkAction, BranchProtectionAction, SettingsAction, SettingsActionKind,
 };
 use multipush_core::engine::plan_apply_actions;
 use multipush_core::formatter::{
-    build_pr_action_map, derive_check_action, derive_pr_action, format_branch_protection_summary,
+    build_pr_action_map, derive_check_action, derive_pr_action, format_autolinks_summary,
+    format_autolinks_summary_for_check, format_branch_protection_summary,
     format_branch_protection_summary_for_check, format_pr_summary, format_pr_summary_for_check,
     format_settings_summary, format_settings_summary_for_check, group_by_repo,
+    has_autolinks_actions as has_apply_autolinks_actions,
     has_branch_protection_actions as has_apply_branch_protection_actions,
     has_settings_actions as has_apply_settings_actions, Formatter, PolicyCounts, PolicyReport,
     RepoCounts, RepoOutcome, Report,
@@ -198,6 +200,52 @@ fn render_protection_section(
     out.push('\n');
 }
 
+fn render_autolinks_section(
+    applied: &[AutolinkAction],
+    errored: &[AutolinkAction],
+    out: &mut String,
+) {
+    writeln!(out, "## Autolink updates\n").unwrap();
+    writeln!(out, "| Repository | Policies | Action | Autolinks |").unwrap();
+    writeln!(out, "|---|---|---|---|").unwrap();
+    for a in applied {
+        let label = match a.action {
+            SettingsActionKind::Applied => "autolinks reconciled",
+            SettingsActionKind::DryRun => "would reconcile autolinks",
+            SettingsActionKind::Error => "error",
+        };
+        writeln!(
+            out,
+            "| {} | {} | {} | {} |",
+            a.repo_name,
+            a.policy_names.join(", "),
+            label,
+            format_autolink_specs(&a.specs),
+        )
+        .unwrap();
+    }
+    for a in errored {
+        writeln!(
+            out,
+            "| {} | {} | error: {} | {} |",
+            a.repo_name,
+            a.policy_names.join(", "),
+            a.error.as_deref().unwrap_or("unknown"),
+            format_autolink_specs(&a.specs),
+        )
+        .unwrap();
+    }
+    out.push('\n');
+}
+
+fn format_autolink_specs(specs: &[multipush_core::model::AutolinkSpec]) -> String {
+    specs
+        .iter()
+        .map(|s| format!("`{}` → `{}`", s.key_prefix, s.url_template))
+        .collect::<Vec<_>>()
+        .join("<br>")
+}
+
 impl Default for MarkdownFormatter {
     fn default() -> Self {
         Self::new()
@@ -211,7 +259,7 @@ impl Formatter for MarkdownFormatter {
 
     fn format(&self, report: &Report) -> multipush_core::Result<String> {
         let mut out = String::from("# multipush Report\n\n");
-        let (planned_settings, planned_protection) = plan_apply_actions(report);
+        let (planned_settings, planned_protection, planned_autolinks) = plan_apply_actions(report);
 
         for policy in &report.results {
             render_policy_header(policy, &mut out);
@@ -251,6 +299,9 @@ impl Formatter for MarkdownFormatter {
         if !planned_protection.is_empty() {
             render_protection_section(&planned_protection, &[], &mut out);
         }
+        if !planned_autolinks.is_empty() {
+            render_autolinks_section(&planned_autolinks, &[], &mut out);
+        }
 
         out.push_str(&format_overview(report));
         writeln!(out, "- PRs: {}", format_pr_summary_for_check(report)).unwrap();
@@ -260,10 +311,16 @@ impl Formatter for MarkdownFormatter {
             format_settings_summary_for_check(&planned_settings)
         )
         .unwrap();
-        write!(
+        writeln!(
             out,
             "- Branch protection: {}",
             format_branch_protection_summary_for_check(&planned_protection),
+        )
+        .unwrap();
+        write!(
+            out,
+            "- Autolinks: {}",
+            format_autolinks_summary_for_check(&planned_autolinks),
         )
         .unwrap();
 
@@ -366,13 +423,27 @@ impl Formatter for MarkdownFormatter {
             );
         }
 
+        if has_apply_autolinks_actions(apply_report) {
+            render_autolinks_section(
+                &apply_report.autolinks_applied,
+                &apply_report.autolinks_errored,
+                &mut out,
+            );
+        }
+
         out.push_str(&format_overview(&apply_report.report));
         writeln!(out, "- PRs: {}", format_pr_summary(apply_report)).unwrap();
         writeln!(out, "- Settings: {}", format_settings_summary(apply_report)).unwrap();
-        write!(
+        writeln!(
             out,
             "- Branch protection: {}",
             format_branch_protection_summary(apply_report),
+        )
+        .unwrap();
+        write!(
+            out,
+            "- Autolinks: {}",
+            format_autolinks_summary(apply_report),
         )
         .unwrap();
 
@@ -491,6 +562,8 @@ mod tests {
             settings_errored: vec![],
             branch_protection_applied: vec![],
             branch_protection_errored: vec![],
+            autolinks_applied: vec![],
+            autolinks_errored: vec![],
         };
 
         let formatter = MarkdownFormatter::new();

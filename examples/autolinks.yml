@@ -1,0 +1,38 @@
+# Autolink policy example
+#
+# Demonstrates the `ensure_autolink` rule, which configures GitHub autolink
+# references directly via the API (not via PRs). Autolinks turn references like
+# `JIRA-123` in issues, PRs, and commit messages into links to an external
+# tracker such as Jira.
+#
+# Autolinks are keyed by `key_prefix`: at most one can exist per prefix on a
+# repo. If a link already exists on the prefix but points elsewhere, apply
+# replaces it. Links on prefixes you don't declare are left untouched.
+#
+# `url_template` must contain the `<num>` placeholder, which GitHub substitutes
+# with the matched reference. Set `is_alphanumeric: false` for strictly numeric
+# ids (the usual case for Jira-style `JIRA-123` references).
+#
+# Usage:
+#   export GITHUB_ORG=my-org
+#   export GITHUB_TOKEN=ghp_...
+#   multipush check -c examples/autolinks.yml
+#   multipush apply --dry-run -c examples/autolinks.yml
+#   multipush apply -c examples/autolinks.yml
+
+provider:
+  type: github
+  org: ${GITHUB_ORG}
+  token: ${GITHUB_TOKEN}
+
+policies:
+  - name: jira-autolinks
+    description: Link JIRA-style references to our Jira instance
+    severity: warning
+    targets:
+      repos: "${GITHUB_ORG}/*"
+    rules:
+      - !ensure_autolink
+        key_prefix: "JIRA-"
+        url_template: "https://example.atlassian.net/browse/JIRA-<num>"
+        is_alphanumeric: false

@@ -26,6 +26,13 @@ pub enum RuleDefinition {
     RepoSettings(RepoSettingsConfig),
     BranchProtection(BranchProtectionConfig),
     FileAbsent(FileAbsentConfig),
+    EnsureAutolink(EnsureAutolinkConfig),
+}
+
+/// Default for `EnsureAutolinkConfig::is_alphanumeric`, matching GitHub's own
+/// API default of `true`.
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -206,6 +213,34 @@ pub struct RepoSettingsConfig {
 #[serde(deny_unknown_fields)]
 pub struct FileAbsentConfig {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EnsureAutolinkConfig {
+    /// The prefix that triggers a reference, e.g. `"JIRA-"`. GitHub requires it
+    /// to end with a non-alphanumeric character (commonly `-`).
+    pub key_prefix: String,
+    /// The target URL template. Must contain the `<num>` placeholder, which
+    /// GitHub substitutes with the matched reference, e.g.
+    /// `"https://example.atlassian.net/browse/JIRA-<num>"`.
+    pub url_template: String,
+    /// Whether the matched reference is alphanumeric. Defaults to GitHub's own
+    /// default of `true`. Set to `false` for strictly numeric references — the
+    /// usual case for JIRA-style numeric ticket ids (`JIRA-123`).
+    #[serde(default = "default_true")]
+    pub is_alphanumeric: bool,
+}
+
+impl EnsureAutolinkConfig {
+    /// The desired autolink as a provider-agnostic [`AutolinkSpec`].
+    pub fn to_spec(&self) -> crate::model::AutolinkSpec {
+        crate::model::AutolinkSpec {
+            key_prefix: self.key_prefix.clone(),
+            url_template: self.url_template.clone(),
+            is_alphanumeric: self.is_alphanumeric,
+        }
+    }
 }
 
 #[cfg(test)]

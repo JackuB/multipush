@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{BranchProtectionPatch, FileChange, Repo, RepoSettingsPatch};
+use crate::model::{AutolinkSpec, BranchProtectionPatch, FileChange, Repo, RepoSettingsPatch};
 use crate::provider::Provider;
 use crate::Result;
 
@@ -39,6 +39,13 @@ pub enum Remediation {
         branch: String,
         patch: BranchProtectionPatch,
     },
+    /// Ensure a single autolink reference exists on the repo. Autolinks are
+    /// keyed by `key_prefix`; the executor creates the link (replacing any
+    /// existing link on the same prefix that differs).
+    Autolink {
+        description: String,
+        spec: AutolinkSpec,
+    },
 }
 
 impl Remediation {
@@ -47,6 +54,7 @@ impl Remediation {
             Self::FileChanges { description, .. } => description,
             Self::RepoSettings { description, .. } => description,
             Self::BranchProtection { description, .. } => description,
+            Self::Autolink { description, .. } => description,
         }
     }
 }

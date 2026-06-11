@@ -629,6 +629,10 @@ fn run_list_rules(verbose: u8, quiet: bool) -> Result<ExitCode> {
             "file_absent",
             "Ensure a file does NOT exist (with deletion remediation)",
         ),
+        (
+            "ensure_autolink",
+            "Ensure a GitHub autolink reference exists (e.g. JIRA-123 -> Jira)",
+        ),
     ];
 
     if quiet {

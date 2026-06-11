@@ -18,24 +18,33 @@
 use std::collections::HashMap;
 
 use crate::formatter::{RepoOutcome, Report};
-use crate::model::{BranchProtectionPatch, Repo, RepoSettingsPatch, Visibility};
+use crate::model::{AutolinkSpec, BranchProtectionPatch, Repo, RepoSettingsPatch, Visibility};
 use crate::rule::Remediation;
 
-use super::executor::{BranchProtectionAction, SettingsAction, SettingsActionKind};
+use super::executor::{AutolinkAction, BranchProtectionAction, SettingsAction, SettingsActionKind};
 
 /// Plan all cross-policy API actions implied by a check [`Report`].
 ///
-/// Returns `(settings, branch_protection)` lists of would-apply actions, one
-/// entry per (repo) and (repo, branch) target respectively. Entries with an
-/// empty patch after merging are dropped — they represent rules that emitted
-/// a `RepoSettings`/`BranchProtection` remediation only for provenance.
-pub fn plan_apply_actions(report: &Report) -> (Vec<SettingsAction>, Vec<BranchProtectionAction>) {
+/// Returns `(settings, branch_protection, autolinks)` lists of would-apply
+/// actions, one entry per (repo), (repo, branch), and (repo) target
+/// respectively. Settings/protection entries with an empty patch after merging
+/// are dropped — they represent rules that emitted a remediation only for
+/// provenance. Autolink entries with no desired specs are likewise dropped.
+pub fn plan_apply_actions(
+    report: &Report,
+) -> (
+    Vec<SettingsAction>,
+    Vec<BranchProtectionAction>,
+    Vec<AutolinkAction>,
+) {
     let mut settings_by_repo: HashMap<String, (Repo, RepoSettingsPatch, Vec<String>)> =
         HashMap::new();
     let mut protection_by_target: HashMap<
         (String, String),
         (Repo, BranchProtectionPatch, Vec<String>),
     > = HashMap::new();
+    let mut autolinks_by_repo: HashMap<String, (Repo, Vec<AutolinkSpec>, Vec<String>)> =
+        HashMap::new();
 
     for policy_report in &report.results {
         let policy_name = &policy_report.policy_name;
@@ -68,6 +77,18 @@ pub fn plan_apply_actions(report: &Report) -> (Vec<SettingsAction>, Vec<BranchPr
                                 (repo.clone(), BranchProtectionPatch::default(), Vec::new())
                             });
                         entry.1.merge(patch.clone());
+                        if !entry.2.contains(policy_name) {
+                            entry.2.push(policy_name.clone());
+                        }
+                    }
+                    Remediation::Autolink { spec, .. } => {
+                        let entry = autolinks_by_repo
+                            .entry(repo.full_name.clone())
+                            .or_insert_with(|| (repo.clone(), Vec::new(), Vec::new()));
+                        // Last writer wins per key_prefix so two policies can't
+                        // queue conflicting links for the same prefix.
+                        entry.1.retain(|s| s.key_prefix != spec.key_prefix);
+                        entry.1.push(spec.clone());
                         if !entry.2.contains(policy_name) {
                             entry.2.push(policy_name.clone());
                         }
@@ -105,7 +126,19 @@ pub fn plan_apply_actions(report: &Report) -> (Vec<SettingsAction>, Vec<BranchPr
         )
         .collect();
 
-    (settings, protection)
+    let autolinks: Vec<AutolinkAction> = autolinks_by_repo
+        .into_iter()
+        .filter(|(_, (_, specs, _))| !specs.is_empty())
+        .map(|(_, (repo, specs, policy_names))| AutolinkAction {
+            repo_name: repo.full_name,
+            policy_names,
+            specs,
+            action: SettingsActionKind::DryRun,
+            error: None,
+        })
+        .collect();
+
+    (settings, protection, autolinks)
 }
 
 /// Build a minimal Repo for the aggregation key. Visibility/topics/etc. are
@@ -186,7 +219,7 @@ mod tests {
             summary: Summary::default(),
         };
 
-        let (settings, protection) = plan_apply_actions(&report);
+        let (settings, protection, _autolinks) = plan_apply_actions(&report);
         assert_eq!(settings.len(), 1);
         let a = &settings[0];
         assert_eq!(a.repo_name, "org/a");
@@ -218,7 +251,7 @@ mod tests {
             summary: Summary::default(),
         };
 
-        let (settings, _) = plan_apply_actions(&report);
+        let (settings, _, _) = plan_apply_actions(&report);
         assert!(settings.is_empty());
     }
 
@@ -251,7 +284,7 @@ mod tests {
             summary: Summary::default(),
         };
 
-        let (_, protection) = plan_apply_actions(&report);
+        let (_, protection, _) = plan_apply_actions(&report);
         assert_eq!(protection.len(), 2);
         let mut branches: Vec<&str> = protection.iter().map(|p| p.branch.as_str()).collect();
         branches.sort();
@@ -276,8 +309,9 @@ mod tests {
             summary: Summary::default(),
         };
 
-        let (s, p) = plan_apply_actions(&report);
+        let (s, p, a) = plan_apply_actions(&report);
         assert!(s.is_empty());
         assert!(p.is_empty());
+        assert!(a.is_empty());
     }
 }

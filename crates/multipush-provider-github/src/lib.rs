@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use multipush_core::config::ProviderConfig;
 use multipush_core::error::CoreError;
 use multipush_core::model::{
-    BranchProtection, BranchProtectionPatch, FileChange, FileContent, PrState, PullRequest, Repo,
-    RepoSettings, RepoSettingsPatch, RequiredPullRequestReviews, RequiredStatusChecks, Visibility,
+    Autolink, AutolinkSpec, BranchProtection, BranchProtectionPatch, FileChange, FileContent,
+    PrState, PullRequest, Repo, RepoSettings, RepoSettingsPatch, RequiredPullRequestReviews,
+    RequiredStatusChecks, Visibility,
 };
 use multipush_core::provider::Provider;
 use octocrab::Octocrab;
@@ -46,6 +47,24 @@ struct GitTreeResponse {
 struct UpdateRefRequest {
     sha: String,
     force: bool,
+}
+
+// --- Autolinks API structs (not covered by octocrab typed API) ---
+
+#[derive(serde::Deserialize)]
+struct AutolinkPayload {
+    id: u64,
+    key_prefix: String,
+    url_template: String,
+    #[serde(default)]
+    is_alphanumeric: bool,
+}
+
+#[derive(serde::Serialize)]
+struct CreateAutolinkRequest<'a> {
+    key_prefix: &'a str,
+    url_template: &'a str,
+    is_alphanumeric: bool,
 }
 
 struct RateLimitState {
@@ -743,6 +762,88 @@ impl Provider for GitHubProvider {
             Ok(())
         }
         .instrument(debug_span!("api", method = "update_branch_protection", repo = %repo.full_name, branch = branch))
+        .await
+    }
+
+    async fn list_autolinks(&self, repo: &Repo) -> multipush_core::Result<Vec<Autolink>> {
+        async {
+            self.check_rate_limit().await?;
+
+            let payloads: Vec<AutolinkPayload> = self
+                .client
+                .get(
+                    format!("/repos/{}/{}/autolinks", repo.owner, repo.name),
+                    None::<&()>,
+                )
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(payloads
+                .into_iter()
+                .map(|p| Autolink {
+                    id: p.id,
+                    key_prefix: p.key_prefix,
+                    url_template: p.url_template,
+                    is_alphanumeric: p.is_alphanumeric,
+                })
+                .collect())
+        }
+        .instrument(debug_span!("api", method = "list_autolinks", repo = %repo.full_name))
+        .await
+    }
+
+    async fn create_autolink(
+        &self,
+        repo: &Repo,
+        spec: &AutolinkSpec,
+    ) -> multipush_core::Result<()> {
+        async {
+            self.check_rate_limit().await?;
+
+            let body = CreateAutolinkRequest {
+                key_prefix: &spec.key_prefix,
+                url_template: &spec.url_template,
+                is_alphanumeric: spec.is_alphanumeric,
+            };
+
+            let _: serde_json::Value = self
+                .client
+                .post(
+                    format!("/repos/{}/{}/autolinks", repo.owner, repo.name),
+                    Some(&body),
+                )
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(())
+        }
+        .instrument(debug_span!("api", method = "create_autolink", repo = %repo.full_name, key_prefix = %spec.key_prefix))
+        .await
+    }
+
+    async fn delete_autolink(&self, repo: &Repo, id: u64) -> multipush_core::Result<()> {
+        async {
+            self.check_rate_limit().await?;
+
+            // A successful delete is `204 No Content`, so we can't route it
+            // through the typed `delete` helper (it would try to deserialize an
+            // empty body). Issue the raw request and only map HTTP errors.
+            let response = self
+                .client
+                ._delete(
+                    format!("/repos/{}/{}/autolinks/{}", repo.owner, repo.name, id),
+                    None::<&()>,
+                )
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            octocrab::map_github_error(response)
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            Ok(())
+        }
+        .instrument(debug_span!("api", method = "delete_autolink", repo = %repo.full_name, id = id))
         .await
     }
 }
@@ -1776,6 +1877,119 @@ mod tests {
         let result = provider
             .update_branch_protection(&repo, "main", &patch)
             .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_autolinks_parses_payload() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo/autolinks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 1,
+                    "key_prefix": "JIRA-",
+                    "url_template": "https://example.atlassian.net/browse/JIRA-<num>",
+                    "is_alphanumeric": false
+                },
+                {
+                    "id": 2,
+                    "key_prefix": "TICKET-",
+                    "url_template": "https://example.com/<num>",
+                    "is_alphanumeric": true
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let result = provider.list_autolinks(&repo).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, 1);
+        assert_eq!(result[0].key_prefix, "JIRA-");
+        assert_eq!(
+            result[0].url_template,
+            "https://example.atlassian.net/browse/JIRA-<num>"
+        );
+        assert!(!result[0].is_alphanumeric);
+        assert!(result[1].is_alphanumeric);
+    }
+
+    #[tokio::test]
+    async fn create_autolink_sends_post() {
+        use wiremock::matchers::body_json;
+
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        let spec = AutolinkSpec {
+            key_prefix: "JIRA-".to_string(),
+            url_template: "https://example.atlassian.net/browse/JIRA-<num>".to_string(),
+            is_alphanumeric: false,
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test-org/test-repo/autolinks"))
+            .and(body_json(serde_json::json!({
+                "key_prefix": "JIRA-",
+                "url_template": "https://example.atlassian.net/browse/JIRA-<num>",
+                "is_alphanumeric": false
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 9,
+                "key_prefix": "JIRA-",
+                "url_template": "https://example.atlassian.net/browse/JIRA-<num>",
+                "is_alphanumeric": false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        provider.create_autolink(&repo, &spec).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_autolink_sends_delete_and_tolerates_no_content() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        // GitHub returns 204 No Content with an empty body; the raw-request
+        // path must not try to deserialize it.
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test-org/test-repo/autolinks/9"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        provider.delete_autolink(&repo, 9).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_autolink_api_error() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test-org/test-repo/autolinks/9"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(github_error_json("Not Found")))
+            .mount(&server)
+            .await;
+
+        let result = provider.delete_autolink(&repo, 9).await;
         assert!(result.is_err());
     }
 }

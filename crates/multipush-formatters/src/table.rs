@@ -4,13 +4,15 @@ use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
 use multipush_core::engine::executor::{
-    ApplyReport, BranchProtectionAction, SettingsAction, SettingsActionKind,
+    ApplyReport, AutolinkAction, BranchProtectionAction, SettingsAction, SettingsActionKind,
 };
 use multipush_core::engine::plan_apply_actions;
 use multipush_core::formatter::{
-    build_pr_action_map, derive_check_action, derive_pr_action, format_branch_protection_summary,
+    build_pr_action_map, derive_check_action, derive_pr_action, format_autolinks_summary,
+    format_autolinks_summary_for_check, format_branch_protection_summary,
     format_branch_protection_summary_for_check, format_pr_summary, format_pr_summary_for_check,
     format_settings_summary, format_settings_summary_for_check, group_by_repo,
+    has_autolinks_actions as has_apply_autolinks_actions,
     has_branch_protection_actions as has_apply_branch_protection_actions,
     has_settings_actions as has_apply_settings_actions, Formatter, PolicyCounts, PolicyReport,
     RepoCounts, RepoOutcome, Report,
@@ -64,6 +66,18 @@ struct BranchProtectionRow {
     action: String,
     #[tabled(rename = "Patch")]
     patch: String,
+}
+
+#[derive(Tabled)]
+struct AutolinkRow {
+    #[tabled(rename = "Repository")]
+    repo: String,
+    #[tabled(rename = "Policies")]
+    policies: String,
+    #[tabled(rename = "Action")]
+    action: String,
+    #[tabled(rename = "Autolinks")]
+    autolinks: String,
 }
 
 pub struct TableFormatter {
@@ -313,6 +327,36 @@ fn render_protection_table(
     Table::new(rows).with(Style::sharp()).to_string()
 }
 
+fn render_autolinks_table(applied: &[AutolinkAction], errored: &[AutolinkAction]) -> String {
+    let mut rows: Vec<AutolinkRow> = Vec::new();
+    for a in applied {
+        let label = match a.action {
+            SettingsActionKind::Applied => "autolinks reconciled",
+            SettingsActionKind::DryRun => "would reconcile autolinks",
+            SettingsActionKind::Error => "error",
+        };
+        rows.push(AutolinkRow {
+            repo: a.repo_name.clone(),
+            policies: a.policy_names.join(", "),
+            action: label.to_string(),
+            autolinks: format_autolink_specs(&a.specs),
+        });
+    }
+    for a in errored {
+        rows.push(AutolinkRow {
+            repo: a.repo_name.clone(),
+            policies: a.policy_names.join(", "),
+            action: a
+                .error
+                .clone()
+                .map(|e| format!("error: {e}"))
+                .unwrap_or_else(|| "error".to_string()),
+            autolinks: format_autolink_specs(&a.specs),
+        });
+    }
+    Table::new(rows).with(Style::sharp()).to_string()
+}
+
 impl Formatter for TableFormatter {
     fn name(&self) -> &str {
         "table"
@@ -320,7 +364,7 @@ impl Formatter for TableFormatter {
 
     fn format(&self, report: &Report) -> multipush_core::Result<String> {
         let mut out = String::new();
-        let (planned_settings, planned_protection) = plan_apply_actions(report);
+        let (planned_settings, planned_protection, planned_autolinks) = plan_apply_actions(report);
 
         for (i, policy) in report.results.iter().enumerate() {
             if i > 0 {
@@ -351,16 +395,23 @@ impl Formatter for TableFormatter {
             writeln!(out, "{}", render_protection_table(&planned_protection, &[])).unwrap();
         }
 
+        if !planned_autolinks.is_empty() {
+            out.push('\n');
+            writeln!(out, "Autolink updates:").unwrap();
+            writeln!(out, "{}", render_autolinks_table(&planned_autolinks, &[])).unwrap();
+        }
+
         if !report.results.is_empty() {
             out.push('\n');
         }
         out.push_str(&format_overview(report));
         write!(
             out,
-            "\nPRs:               {}\nSettings:          {}\nBranch protection: {}",
+            "\nPRs:               {}\nSettings:          {}\nBranch protection: {}\nAutolinks:         {}",
             format_pr_summary_for_check(report),
             format_settings_summary_for_check(&planned_settings),
             format_branch_protection_summary_for_check(&planned_protection),
+            format_autolinks_summary_for_check(&planned_autolinks),
         )
         .unwrap();
 
@@ -477,16 +528,31 @@ impl Formatter for TableFormatter {
             .unwrap();
         }
 
+        if has_apply_autolinks_actions(apply_report) {
+            out.push('\n');
+            writeln!(out, "Autolink updates:").unwrap();
+            writeln!(
+                out,
+                "{}",
+                render_autolinks_table(
+                    &apply_report.autolinks_applied,
+                    &apply_report.autolinks_errored,
+                )
+            )
+            .unwrap();
+        }
+
         if !report.results.is_empty() {
             out.push('\n');
         }
         out.push_str(&format_overview(report));
         write!(
             out,
-            "\nPRs:               {}\nSettings:          {}\nBranch protection: {}",
+            "\nPRs:               {}\nSettings:          {}\nBranch protection: {}\nAutolinks:         {}",
             format_pr_summary(apply_report),
             format_settings_summary(apply_report),
             format_branch_protection_summary(apply_report),
+            format_autolinks_summary(apply_report),
         )
         .unwrap();
 
@@ -500,6 +566,14 @@ fn format_patch(patch: &multipush_core::model::RepoSettingsPatch) -> String {
 
 fn format_branch_protection_patch(patch: &multipush_core::model::BranchProtectionPatch) -> String {
     serde_json::to_string(patch).unwrap_or_else(|_| "<unserializable>".to_string())
+}
+
+fn format_autolink_specs(specs: &[multipush_core::model::AutolinkSpec]) -> String {
+    specs
+        .iter()
+        .map(|s| format!("{} -> {}", s.key_prefix, s.url_template))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]
@@ -891,6 +965,8 @@ mod tests {
             settings_errored: vec![],
             branch_protection_applied: vec![],
             branch_protection_errored: vec![],
+            autolinks_applied: vec![],
+            autolinks_errored: vec![],
         };
 
         let formatter = TableFormatter::with_color(false);

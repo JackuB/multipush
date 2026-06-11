@@ -156,6 +156,41 @@ pub struct RepoSettingsPatch {
     pub default_branch: Option<String>,
 }
 
+/// An autolink reference configured on a repository.
+///
+/// GitHub turns occurrences of `<key_prefix><ref>` in issues, PRs, commits,
+/// etc. into links built from `url_template` (which must contain the `<num>`
+/// placeholder). The `id` is assigned by the platform and is needed to delete
+/// the autolink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Autolink {
+    pub id: u64,
+    pub key_prefix: String,
+    pub url_template: String,
+    pub is_alphanumeric: bool,
+}
+
+/// Desired autolink reference (no platform-assigned `id`).
+///
+/// This is what a policy declares and what `create_autolink` sends. Autolinks
+/// are keyed by `key_prefix`: at most one can exist per prefix on a repo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutolinkSpec {
+    pub key_prefix: String,
+    pub url_template: String,
+    pub is_alphanumeric: bool,
+}
+
+impl Autolink {
+    /// True if this existing autolink already matches the desired `spec`
+    /// (prefix, target template, and reference kind all equal).
+    pub fn matches(&self, spec: &AutolinkSpec) -> bool {
+        self.key_prefix == spec.key_prefix
+            && self.url_template == spec.url_template
+            && self.is_alphanumeric == spec.is_alphanumeric
+    }
+}
+
 /// Required status checks for a protected branch.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequiredStatusChecks {

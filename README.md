@@ -263,8 +263,9 @@ Rules use YAML tags to specify their type. Each rule is prefixed with `!` in the
 | file_absent | `!file_absent` | PR | Ensure a file does **not** exist; remediates by deleting it |
 | repo_settings | `!repo_settings` | Direct PATCH | Enforce repository-level toggles (issues, wiki, merge strategies, auto-delete on merge, …) |
 | branch_protection | `!branch_protection` | Direct PATCH | Enforce branch protection on a specific branch (defaults to the repo's default branch) |
+| ensure_autolink | `!ensure_autolink` | Direct API | Ensure a GitHub autolink reference exists (e.g. link `JIRA-123` to a Jira ticket) |
 
-Rules whose remediation type is "Direct PATCH" don't open PRs — multipush calls the GitHub API directly during `apply`. The corresponding rows show up in the table's *Repo settings updates* and *Branch protection updates* sections rather than the PR table.
+Rules whose remediation type is "Direct PATCH" or "Direct API" don't open PRs — multipush calls the GitHub API directly during `apply`. The corresponding rows show up in the table's *Repo settings updates*, *Branch protection updates*, and *Autolink updates* sections rather than the PR table.
 
 ### `!ensure_file`
 
@@ -454,6 +455,31 @@ under *Branch protection updates*.
     require_code_owner_reviews: true
   enforce_admins: true
   required_linear_history: true
+```
+
+### `!ensure_autolink`
+
+Ensure a [GitHub autolink reference](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-autolinks-to-reference-external-resources)
+exists on the repo — the feature that turns text like `JIRA-123` in issues, PRs,
+and commit messages into links to an external tracker. Remediated via a direct
+API call (no PR); the `apply` table reports these under *Autolink updates*.
+
+Autolinks are keyed by `key_prefix` — at most one can exist per prefix. If a link
+already exists on the prefix but points elsewhere, `apply` replaces it. Links on
+prefixes you don't declare are left untouched.
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `key_prefix` | string | Yes | Prefix that triggers a reference, e.g. `JIRA-`. Must end with a non-alphanumeric character |
+| `url_template` | string | Yes | Target URL. Must contain the `<num>` placeholder, which GitHub substitutes with the matched reference |
+| `is_alphanumeric` | bool | No (default `true`) | Whether the reference is alphanumeric. Set `false` for strictly numeric ids — the usual case for Jira-style `JIRA-123` |
+
+```yaml
+# Link JIRA-123 to our Jira instance.
+- !ensure_autolink
+  key_prefix: "JIRA-"
+  url_template: "https://example.atlassian.net/browse/JIRA-<num>"
+  is_alphanumeric: false
 ```
 
 ## Recipes

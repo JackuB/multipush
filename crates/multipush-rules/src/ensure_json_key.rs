@@ -233,6 +233,25 @@ mod tests {
         ) -> multipush_core::Result<()> {
             unimplemented!()
         }
+
+        async fn list_autolinks(
+            &self,
+            _repo: &Repo,
+        ) -> multipush_core::Result<Vec<multipush_core::model::Autolink>> {
+            unimplemented!()
+        }
+
+        async fn create_autolink(
+            &self,
+            _repo: &Repo,
+            _spec: &multipush_core::model::AutolinkSpec,
+        ) -> multipush_core::Result<()> {
+            unimplemented!()
+        }
+
+        async fn delete_autolink(&self, _repo: &Repo, _id: u64) -> multipush_core::Result<()> {
+            unimplemented!()
+        }
     }
 
     fn test_repo() -> Repo {

@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use crate::config::{PolicyConfig, ProviderConfig, ProviderType, RootConfig};
 use crate::formatter::{PolicyReport, RepoOutcome, RepoResult, Report, Summary};
 use crate::model::{
-    BranchProtection, BranchProtectionPatch, FileChange, FileContent, PrState, PullRequest, Repo,
-    RepoSettings, RepoSettingsPatch, Severity, Visibility,
+    Autolink, AutolinkSpec, BranchProtection, BranchProtectionPatch, FileChange, FileContent,
+    PrState, PullRequest, Repo, RepoSettings, RepoSettingsPatch, Severity, Visibility,
 };
 use crate::provider::Provider;
 use crate::rule::{AttributedRemediation, Remediation};
@@ -28,6 +28,13 @@ pub struct MockProvider {
     pub update_branch_protection_calls: AtomicUsize,
     pub update_branch_protection_history: Mutex<Vec<(String, String, BranchProtectionPatch)>>,
     pub enable_auto_merge_calls: AtomicUsize,
+    /// Autolinks keyed by repo full name. The inner value is the stored list,
+    /// keeping platform-assigned ids stable across calls.
+    pub autolinks: Mutex<HashMap<String, Vec<Autolink>>>,
+    pub create_autolink_calls: AtomicUsize,
+    pub create_autolink_history: Mutex<Vec<(String, AutolinkSpec)>>,
+    pub delete_autolink_calls: AtomicUsize,
+    pub delete_autolink_history: Mutex<Vec<(String, u64)>>,
 }
 
 impl MockProvider {
@@ -45,7 +52,21 @@ impl MockProvider {
             update_branch_protection_calls: AtomicUsize::new(0),
             update_branch_protection_history: Mutex::new(Vec::new()),
             enable_auto_merge_calls: AtomicUsize::new(0),
+            autolinks: Mutex::new(HashMap::new()),
+            create_autolink_calls: AtomicUsize::new(0),
+            create_autolink_history: Mutex::new(Vec::new()),
+            delete_autolink_calls: AtomicUsize::new(0),
+            delete_autolink_history: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Seed the autolinks returned by `list_autolinks` for a repo's full name.
+    pub fn with_autolinks(self, full_name: &str, autolinks: Vec<Autolink>) -> Self {
+        self.autolinks
+            .lock()
+            .unwrap()
+            .insert(full_name.to_string(), autolinks);
+        self
     }
 
     /// Set the branch protection returned for a given `"owner/repo:branch"` key.
@@ -201,6 +222,46 @@ impl Provider for MockProvider {
             branch.to_string(),
             patch.clone(),
         ));
+        Ok(())
+    }
+
+    async fn list_autolinks(&self, repo: &Repo) -> Result<Vec<Autolink>> {
+        Ok(self
+            .autolinks
+            .lock()
+            .unwrap()
+            .get(&repo.full_name)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn create_autolink(&self, repo: &Repo, spec: &AutolinkSpec) -> Result<()> {
+        self.create_autolink_calls.fetch_add(1, Ordering::SeqCst);
+        self.create_autolink_history
+            .lock()
+            .unwrap()
+            .push((repo.full_name.clone(), spec.clone()));
+        let mut all = self.autolinks.lock().unwrap();
+        let list = all.entry(repo.full_name.clone()).or_default();
+        let next_id = list.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+        list.push(Autolink {
+            id: next_id,
+            key_prefix: spec.key_prefix.clone(),
+            url_template: spec.url_template.clone(),
+            is_alphanumeric: spec.is_alphanumeric,
+        });
+        Ok(())
+    }
+
+    async fn delete_autolink(&self, repo: &Repo, id: u64) -> Result<()> {
+        self.delete_autolink_calls.fetch_add(1, Ordering::SeqCst);
+        self.delete_autolink_history
+            .lock()
+            .unwrap()
+            .push((repo.full_name.clone(), id));
+        if let Some(list) = self.autolinks.lock().unwrap().get_mut(&repo.full_name) {
+            list.retain(|a| a.id != id);
+        }
         Ok(())
     }
 }

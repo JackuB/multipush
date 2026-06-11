@@ -6,7 +6,8 @@ use super::plan::plan_apply_actions;
 use crate::config::{ExistingPrStrategy, RootConfig};
 use crate::formatter::{RepoOutcome, Report};
 use crate::model::{
-    BranchProtectionPatch, FileChange, PullRequest, Repo, RepoSettingsPatch, Visibility,
+    AutolinkSpec, BranchProtectionPatch, FileChange, PullRequest, Repo, RepoSettingsPatch,
+    Visibility,
 };
 use crate::policy_source::PolicySourceInfo;
 use crate::provider::Provider;
@@ -27,6 +28,8 @@ pub struct ApplyReport {
     pub settings_errored: Vec<SettingsAction>,
     pub branch_protection_applied: Vec<BranchProtectionAction>,
     pub branch_protection_errored: Vec<BranchProtectionAction>,
+    pub autolinks_applied: Vec<AutolinkAction>,
+    pub autolinks_errored: Vec<AutolinkAction>,
 }
 
 /// A single repo-settings update taken (or skipped) during apply.
@@ -46,6 +49,18 @@ pub struct BranchProtectionAction {
     pub branch: String,
     pub policy_names: Vec<String>,
     pub patch: BranchProtectionPatch,
+    pub action: SettingsActionKind,
+    pub error: Option<String>,
+}
+
+/// A single set of autolink reconciliations taken (or skipped) during apply
+/// for one repo. `specs` is the desired set of autolinks aggregated across all
+/// policies that targeted the repo.
+#[derive(Debug)]
+pub struct AutolinkAction {
+    pub repo_name: String,
+    pub policy_names: Vec<String>,
+    pub specs: Vec<AutolinkSpec>,
     pub action: SettingsActionKind,
     pub error: Option<String>,
 }
@@ -111,7 +126,7 @@ pub async fn execute(
     // Settings and branch-protection patches aggregate across policies, so do
     // that work once up-front (the same routine the check formatter uses to
     // preview what apply would do).
-    let (planned_settings, planned_protection) = plan_apply_actions(report);
+    let (planned_settings, planned_protection, planned_autolinks) = plan_apply_actions(report);
 
     for policy_report in &report.results {
         let policy_name = &policy_report.policy_name;
@@ -435,6 +450,50 @@ pub async fn execute(
         }
     }
 
+    // Reconcile autolinks. Unlike settings/protection these are not a single
+    // idempotent PATCH: each desired spec maps to a create (and possibly a
+    // delete of a stale link on the same prefix), so we list the current set
+    // once per repo and diff against it.
+    let mut autolinks_applied = Vec::new();
+    let mut autolinks_errored = Vec::new();
+    for action in planned_autolinks {
+        let repo = build_repo(&action.repo_name, "");
+        let _span = info_span!("apply_autolinks", repo = %repo.full_name).entered();
+
+        if dry_run {
+            let json = serde_json::to_string_pretty(&action.specs)
+                .unwrap_or_else(|_| "<unserializable>".to_string());
+            info!(
+                repo = %repo.full_name,
+                "[dry-run] would reconcile autolinks: {json}"
+            );
+            autolinks_applied.push(action);
+            continue;
+        }
+
+        match reconcile_autolinks(provider, &repo, &action.specs).await {
+            Ok(()) => {
+                info!(repo = %repo.full_name, "reconciled autolinks");
+                autolinks_applied.push(AutolinkAction {
+                    action: SettingsActionKind::Applied,
+                    ..action
+                });
+            }
+            Err(e) => {
+                error!(
+                    repo = %repo.full_name,
+                    error = %e,
+                    "failed to reconcile autolinks"
+                );
+                autolinks_errored.push(AutolinkAction {
+                    action: SettingsActionKind::Error,
+                    error: Some(e.to_string()),
+                    ..action
+                });
+            }
+        }
+    }
+
     Ok(ApplyReport {
         report: report.clone(),
         prs_created,
@@ -446,7 +505,33 @@ pub async fn execute(
         settings_errored,
         branch_protection_applied,
         branch_protection_errored,
+        autolinks_applied,
+        autolinks_errored,
     })
+}
+
+/// Bring a repo's autolinks in line with the desired `specs`. For each spec:
+/// if an identical autolink already exists, do nothing; if one exists on the
+/// same `key_prefix` but differs, delete it and re-create; otherwise create.
+///
+/// Specs are additive — autolinks on prefixes not mentioned by any policy are
+/// left untouched.
+async fn reconcile_autolinks(
+    provider: &dyn Provider,
+    repo: &Repo,
+    specs: &[AutolinkSpec],
+) -> Result<()> {
+    let existing = provider.list_autolinks(repo).await?;
+    for spec in specs {
+        if existing.iter().any(|a| a.matches(spec)) {
+            continue;
+        }
+        if let Some(stale) = existing.iter().find(|a| a.key_prefix == spec.key_prefix) {
+            provider.delete_autolink(repo, stale.id).await?;
+        }
+        provider.create_autolink(repo, spec).await?;
+    }
+    Ok(())
 }
 
 fn build_repo(full_name: &str, default_branch: &str) -> Repo {
@@ -469,7 +554,9 @@ fn collect_changes(remediations: &[AttributedRemediation]) -> Vec<FileChange> {
         .iter()
         .flat_map(|r| match &r.remediation {
             Remediation::FileChanges { changes, .. } => changes.clone(),
-            Remediation::RepoSettings { .. } | Remediation::BranchProtection { .. } => Vec::new(),
+            Remediation::RepoSettings { .. }
+            | Remediation::BranchProtection { .. }
+            | Remediation::Autolink { .. } => Vec::new(),
         })
         .collect()
 }
@@ -513,6 +600,9 @@ fn generate_pr_body(
                 body.push_str(&format!("- {description} *(rule: `{rule_type}`)*\n"));
             }
             Remediation::BranchProtection { description, .. } => {
+                body.push_str(&format!("- {description} *(rule: `{rule_type}`)*\n"));
+            }
+            Remediation::Autolink { description, .. } => {
                 body.push_str(&format!("- {description} *(rule: `{rule_type}`)*\n"));
             }
         }
@@ -778,6 +868,19 @@ mod tests {
             ) -> Result<()> {
                 unimplemented!()
             }
+            async fn list_autolinks(&self, _repo: &Repo) -> Result<Vec<crate::model::Autolink>> {
+                unimplemented!()
+            }
+            async fn create_autolink(
+                &self,
+                _repo: &Repo,
+                _spec: &crate::model::AutolinkSpec,
+            ) -> Result<()> {
+                unimplemented!()
+            }
+            async fn delete_autolink(&self, _repo: &Repo, _id: u64) -> Result<()> {
+                unimplemented!()
+            }
         }
 
         let provider = FailingMockProvider {
@@ -1028,6 +1131,19 @@ mod tests {
                 _branch: &str,
                 _patch: &crate::model::BranchProtectionPatch,
             ) -> Result<()> {
+                unimplemented!()
+            }
+            async fn list_autolinks(&self, _repo: &Repo) -> Result<Vec<crate::model::Autolink>> {
+                unimplemented!()
+            }
+            async fn create_autolink(
+                &self,
+                _repo: &Repo,
+                _spec: &crate::model::AutolinkSpec,
+            ) -> Result<()> {
+                unimplemented!()
+            }
+            async fn delete_autolink(&self, _repo: &Repo, _id: u64) -> Result<()> {
                 unimplemented!()
             }
         }

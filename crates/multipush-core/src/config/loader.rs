@@ -530,6 +530,22 @@ fn validate_rule(
                 errors.push(format!("{ctx}: file_absent.path must not be empty"));
             }
         }
+        RuleDefinition::EnsureAutolink(cfg) => {
+            if cfg.key_prefix.is_empty() {
+                errors.push(format!(
+                    "{ctx}: ensure_autolink.key_prefix must not be empty"
+                ));
+            }
+            if cfg.url_template.is_empty() {
+                errors.push(format!(
+                    "{ctx}: ensure_autolink.url_template must not be empty"
+                ));
+            } else if !cfg.url_template.contains("<num>") {
+                errors.push(format!(
+                    "{ctx}: ensure_autolink.url_template must contain the '<num>' placeholder"
+                ));
+            }
+        }
     }
 }
 

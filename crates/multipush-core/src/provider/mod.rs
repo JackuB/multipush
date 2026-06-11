@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use crate::model::{
-    BranchProtection, BranchProtectionPatch, FileChange, FileContent, PullRequest, Repo,
-    RepoSettings, RepoSettingsPatch,
+    Autolink, AutolinkSpec, BranchProtection, BranchProtectionPatch, FileChange, FileContent,
+    PullRequest, Repo, RepoSettings, RepoSettingsPatch,
 };
 
 use crate::Result;
@@ -71,4 +71,13 @@ pub trait Provider: Send + Sync {
         branch: &str,
         patch: &BranchProtectionPatch,
     ) -> Result<()>;
+
+    /// List the autolink references configured on a repository.
+    async fn list_autolinks(&self, repo: &Repo) -> Result<Vec<Autolink>>;
+
+    /// Create an autolink reference on a repository.
+    async fn create_autolink(&self, repo: &Repo, spec: &AutolinkSpec) -> Result<()>;
+
+    /// Delete the autolink reference with the given platform-assigned `id`.
+    async fn delete_autolink(&self, repo: &Repo, id: u64) -> Result<()>;
 }
