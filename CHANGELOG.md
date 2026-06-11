@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-11
+
+### Added
+- `ensure_autolink` rule (`!ensure_autolink`): ensure a GitHub autolink reference exists on a repo — e.g. link `JIRA-123` references in issues, PRs, and commits to an external tracker such as Jira. Remediated via direct GitHub API calls (no PR); reconciliation is keyed by `key_prefix` and replaces drifted links in place. Reported under a new *Autolink updates* section in the table and markdown formatters.
+
 ## [0.1.0] - 2026-05-28
 
 ### Added
@@ -19,5 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-repos` command for target preview.
 - `validate` command for policy schema checks.
 
-[Unreleased]: https://github.com/JackuB/multipush/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/JackuB/multipush/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/JackuB/multipush/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/JackuB/multipush/releases/tag/v0.1.0
