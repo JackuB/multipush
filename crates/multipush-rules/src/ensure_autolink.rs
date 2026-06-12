@@ -53,8 +53,12 @@ impl Rule for EnsureAutolinkRule {
         {
             Some(current) => (
                 format!(
-                    "Autolink '{}' targets '{}', expected '{}'",
-                    spec.key_prefix, current.url_template, spec.url_template
+                    "Autolink '{}' targets '{}' (is_alphanumeric: {}), expected '{}' (is_alphanumeric: {})",
+                    spec.key_prefix,
+                    current.url_template,
+                    current.is_alphanumeric,
+                    spec.url_template,
+                    spec.is_alphanumeric
                 ),
                 format!(
                     "Update autolink '{}' to target '{}'",
@@ -189,6 +193,48 @@ mod tests {
                 remediation,
             } => {
                 assert!(detail.contains("old.example.com"));
+                assert!(matches!(remediation.unwrap(), Remediation::Autolink { .. }));
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fails_when_only_is_alphanumeric_differs() {
+        let repo = make_repo("org/alpha");
+        // Same prefix and URL, but the existing link is alphanumeric while the
+        // policy wants numeric-only. This is the drift that previously produced
+        // a confusing "expected X, got X" message with identical URLs.
+        let provider = MockProvider::new(vec![repo.clone()]).with_autolinks(
+            "org/alpha",
+            vec![autolink(
+                3,
+                "MC-",
+                "https://example.atlassian.net/browse/MC-<num>",
+                true,
+            )],
+        );
+
+        let rule = EnsureAutolinkRule::new(config(
+            "MC-",
+            "https://example.atlassian.net/browse/MC-<num>",
+            false,
+        ));
+
+        let ctx = RuleContext {
+            provider: &provider,
+            repo: &repo,
+        };
+        let result = rule.evaluate(&ctx).await.unwrap();
+        match result {
+            RuleResult::Fail {
+                detail,
+                remediation,
+            } => {
+                // The message must surface the differing flag so an identical
+                // URL on both sides is no longer baffling.
+                assert!(detail.contains("is_alphanumeric: true"));
+                assert!(detail.contains("is_alphanumeric: false"));
                 assert!(matches!(remediation.unwrap(), Remediation::Autolink { .. }));
             }
             other => panic!("expected Fail, got {other:?}"),
