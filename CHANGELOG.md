@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-07
+
+### Added
+- `custom_property` filter (`!custom_property`): target repos by [GitHub custom property](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization) key/value, with an optional `negate` flag to select repos where the property does *not* match (including where it's unset). Property values are fetched in one batched, paginated call per org.
+
 ## [0.3.0] - 2026-06-11
 
 ### Added
@@ -24,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-repos` command for target preview.
 - `validate` command for policy schema checks.
 
-[Unreleased]: https://github.com/JackuB/multipush/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/JackuB/multipush/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/JackuB/multipush/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/JackuB/multipush/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/JackuB/multipush/releases/tag/v0.1.0
