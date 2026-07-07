@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-07
+
+### Fixed
+- `!branch_protection`: the PUT request to GitHub always omitted any field a policy didn't explicitly set. GitHub's branch protection endpoint requires `required_status_checks`, `enforce_admins`, `required_pull_request_reviews`, and `restrictions` to all be present in the request body (nullable, but not omittable) — so every `apply` for this rule was rejected outright with a validation error. Now fetches the branch's current protection first and fills in anything the policy doesn't set from that, so unrelated settings survive instead of the whole request failing. Note: `restrictions` (push access restrictions) isn't modeled by multipush yet and is always sent as `null` — applying `!branch_protection` to a branch with restrictions configured outside of multipush will clear them.
+- GitHub API error messages were reduced to a useless "GitHub" (e.g. `provider error: GitHub`) in every failure report, because `octocrab::Error`'s default `Display` doesn't include the response body. Errors now surface the actual message from GitHub (permission denied, validation failure, etc.) instead.
+
 ## [0.4.1] - 2026-07-07
 
 ### Fixed
@@ -35,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-repos` command for target preview.
 - `validate` command for policy schema checks.
 
-[Unreleased]: https://github.com/JackuB/multipush/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/JackuB/multipush/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/JackuB/multipush/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/JackuB/multipush/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/JackuB/multipush/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/JackuB/multipush/compare/v0.1.0...v0.3.0

@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "multipush-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "multipush-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "multipush-formatters"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "multipush-core",
  "owo-colors",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "multipush-provider-github"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -1004,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "multipush-rules"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "multipush-core",
@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "multipush-tests"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "multipush-core",
  "multipush-rules",
