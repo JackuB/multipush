@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-07
+
+### Fixed
+- `custom_property` filter: fall back to fetching each repo's custom properties individually when the org-wide batch endpoint is rejected for lacking the organization-level "Custom properties" permission — a fine-grained token with only the *repository*-level "Custom properties" permission now works instead of the filter silently matching zero repos.
+- Custom-properties fetch failures are now logged at `error` (visible at default verbosity) instead of `warn` (only visible with `-v`), since a failure here means a `custom_property` filter can silently match nothing.
+
 ## [0.4.0] - 2026-07-07
 
 ### Added
@@ -29,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-repos` command for target preview.
 - `validate` command for policy schema checks.
 
-[Unreleased]: https://github.com/JackuB/multipush/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/JackuB/multipush/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/JackuB/multipush/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/JackuB/multipush/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/JackuB/multipush/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/JackuB/multipush/releases/tag/v0.1.0
