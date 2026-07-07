@@ -126,6 +126,27 @@
       },
       "additionalProperties": false
     },
+    "CustomPropertyFilter": {
+      "description": "Matches (or, with `negate`, excludes) repos where the custom property `key` is set to `value`.\n\nCustom properties are organization-defined repo metadata; see <https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization>.",
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "negate": {
+          "default": false,
+          "type": "boolean"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "DefaultsConfig": {
       "type": "object",
       "properties": {
@@ -152,11 +173,34 @@
       },
       "additionalProperties": false
     },
+    "EnsureAutolinkConfig": {
+      "type": "object",
+      "required": [
+        "key_prefix",
+        "url_template"
+      ],
+      "properties": {
+        "is_alphanumeric": {
+          "description": "Whether the matched reference is alphanumeric. Defaults to GitHub's own default of `true`. Set to `false` for strictly numeric references — the usual case for JIRA-style numeric ticket ids (`JIRA-123`).",
+          "default": true,
+          "type": "boolean"
+        },
+        "key_prefix": {
+          "description": "The prefix that triggers a reference, e.g. `\"JIRA-\"`. GitHub requires it to end with a non-alphanumeric character (commonly `-`).",
+          "type": "string"
+        },
+        "url_template": {
+          "description": "The target URL template. Must contain the `<num>` placeholder, which GitHub substitutes with the matched reference, e.g. `\"https://example.atlassian.net/browse/JIRA-<num>\"`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "EnsureFileConfig": {
       "type": "object",
       "properties": {
         "default_content": {
-          "description": "Body to write when the file is missing. This only seeds creation — it is never enforced on existing files. When `must_equal` is set, that value governs creation instead and `default_content` must be omitted.",
+          "description": "Body to write when the file is missing. This only seeds creation — it is never enforced on existing files. When `must_equal` is set, that value governs creation instead and `default_content` must be omitted.\n\nEmpty or whitespace-only strings are normalized to `None` so recipes can leave the field unsubstituted without accidentally requesting creation of a blank file.",
           "default": null,
           "type": [
             "string",
@@ -164,7 +208,7 @@
           ]
         },
         "must_contain": {
-          "description": "Predicate: an existing file must contain this substring.",
+          "description": "Predicate: an existing file must contain this substring.\n\nEmpty or whitespace-only strings are normalized to `None` (any file trivially \"contains\" the empty string, so substituting an unset recipe param into this field must not silently turn the check off).",
           "default": null,
           "type": [
             "string",
@@ -316,6 +360,18 @@
           "properties": {
             "visibility": {
               "$ref": "#/definitions/Visibility"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "custom_property"
+          ],
+          "properties": {
+            "custom_property": {
+              "$ref": "#/definitions/CustomPropertyFilter"
             }
           },
           "additionalProperties": false
@@ -601,6 +657,18 @@
           "properties": {
             "file_absent": {
               "$ref": "#/definitions/FileAbsentConfig"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ensure_autolink"
+          ],
+          "properties": {
+            "ensure_autolink": {
+              "$ref": "#/definitions/EnsureAutolinkConfig"
             }
           },
           "additionalProperties": false

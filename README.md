@@ -231,8 +231,6 @@ targets:
 
 ### Filters
 
-> **Note:** Filters are parsed and validated but not yet evaluated at runtime. They will be fully functional in a future release.
-
 Filters use YAML tags to specify their type:
 
 ```yaml
@@ -242,6 +240,13 @@ targets:
     - !has_file package.json
     - !topic nodejs
     - !visibility public
+    - !custom_property
+      key: team
+      value: platform
+    - !custom_property
+      key: team
+      value: platform
+      negate: true
 ```
 
 | Filter | Argument | Description |
@@ -249,6 +254,7 @@ targets:
 | `!has_file` | file path | Only repos containing this file |
 | `!topic` | topic name | Only repos with this GitHub topic |
 | `!visibility` | `public` \| `private` \| `internal` | Only repos with this visibility |
+| `!custom_property` | `key`, `value`, `negate` (optional, default `false`) | Only repos whose [custom property](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization) `key` equals `value`. Set `negate: true` to keep repos where it does *not* equal `value` (including repos where the property isn't set). |
 
 ## Rules
 

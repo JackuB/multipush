@@ -1,5 +1,6 @@
 use multipush_core::config::{
-    EnsureFileConfig, FilterConfig, PolicyConfig, RuleDefinition, TargetConfig,
+    CustomPropertyFilter, EnsureFileConfig, FilterConfig, PolicyConfig, RuleDefinition,
+    TargetConfig,
 };
 use multipush_core::engine::evaluate;
 use multipush_core::model::{Severity, Visibility};
@@ -110,6 +111,64 @@ async fn targeting_visibility() {
         .await
         .unwrap();
     assert_eq!(evaluated_repos(&report), vec!["org/public"]);
+}
+
+#[tokio::test]
+async fn targeting_custom_property() {
+    let mut platform = make_repo("org/platform");
+    platform
+        .custom_properties
+        .insert("team".to_string(), "platform".to_string());
+    let mut web = make_repo("org/web");
+    web.custom_properties
+        .insert("team".to_string(), "web".to_string());
+
+    let provider = MockProvider::new(vec![platform, web])
+        .with_file("org/platform:README.md", "# Platform")
+        .with_file("org/web:README.md", "# Web");
+
+    let config = test_config(vec![policy_with_filters(vec![
+        FilterConfig::CustomProperty(CustomPropertyFilter {
+            key: "team".to_string(),
+            value: "platform".to_string(),
+            negate: false,
+        }),
+    ])]);
+
+    let report = evaluate(&config, &provider, rules_factory, 4)
+        .await
+        .unwrap();
+    assert_eq!(evaluated_repos(&report), vec!["org/platform"]);
+}
+
+#[tokio::test]
+async fn targeting_custom_property_negated() {
+    let mut platform = make_repo("org/platform");
+    platform
+        .custom_properties
+        .insert("team".to_string(), "platform".to_string());
+    let mut web = make_repo("org/web");
+    web.custom_properties
+        .insert("team".to_string(), "web".to_string());
+    let unset = make_repo("org/unset");
+
+    let provider = MockProvider::new(vec![platform, web, unset])
+        .with_file("org/platform:README.md", "# Platform")
+        .with_file("org/web:README.md", "# Web")
+        .with_file("org/unset:README.md", "# Unset");
+
+    let config = test_config(vec![policy_with_filters(vec![
+        FilterConfig::CustomProperty(CustomPropertyFilter {
+            key: "team".to_string(),
+            value: "platform".to_string(),
+            negate: true,
+        }),
+    ])]);
+
+    let report = evaluate(&config, &provider, rules_factory, 4)
+        .await
+        .unwrap();
+    assert_eq!(evaluated_repos(&report), vec!["org/unset", "org/web"]);
 }
 
 #[tokio::test]

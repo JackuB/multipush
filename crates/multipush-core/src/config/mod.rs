@@ -6,7 +6,7 @@ mod rules;
 
 pub use defaults::{ApplyConfig, DefaultsConfig, ExistingPrStrategy};
 pub use loader::{load_config, ConfigSource};
-pub use policy::{FilterConfig, PolicyConfig, TargetConfig};
+pub use policy::{CustomPropertyFilter, FilterConfig, PolicyConfig, TargetConfig};
 pub use provider::{ProviderConfig, ProviderType};
 pub use rules::{
     BranchProtectionConfig, EnsureAutolinkConfig, EnsureFileConfig, EnsureJsonKeyConfig,

@@ -49,6 +49,46 @@ struct UpdateRefRequest {
     force: bool,
 }
 
+// --- Custom properties API structs (not covered by octocrab typed API) ---
+
+#[derive(serde::Deserialize)]
+struct RepoPropertyValues {
+    repository_full_name: String,
+    properties: Vec<RepoPropertyValue>,
+}
+
+#[derive(serde::Deserialize)]
+struct RepoPropertyValue {
+    property_name: String,
+    value: Option<serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct PropertiesQuery {
+    per_page: u8,
+}
+
+/// Flattens a custom property's value into a string for storage on `Repo`.
+///
+/// String and boolean values are used as-is. `multi_select` properties (JSON
+/// arrays) are joined with commas. `null` (an unset property) is dropped —
+/// the property key is simply absent from `custom_properties`.
+fn property_value_to_string(value: Option<serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Array(items) => {
+            let joined: Vec<String> = items
+                .into_iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            Some(joined.join(","))
+        }
+        serde_json::Value::Null => None,
+        other => Some(other.to_string()),
+    }
+}
+
 // --- Autolinks API structs (not covered by octocrab typed API) ---
 
 #[derive(serde::Deserialize)]
@@ -341,6 +381,51 @@ impl GitHubProvider {
 
         Ok(())
     }
+
+    /// Fetch custom property values for every repo in `org` in one batched,
+    /// paginated call, keyed by the repo's `full_name`.
+    ///
+    /// Not part of the `Provider` trait: it's an org-wide bulk fetch used
+    /// internally by `list_repos` rather than a per-repo operation.
+    async fn fetch_custom_properties(
+        &self,
+        org: &str,
+    ) -> multipush_core::Result<HashMap<String, HashMap<String, String>>> {
+        self.check_rate_limit().await?;
+
+        let mut page: octocrab::Page<RepoPropertyValues> = self
+            .client
+            .get(
+                format!("/orgs/{org}/properties/values"),
+                Some(&PropertiesQuery { per_page: 100 }),
+            )
+            .await
+            .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+        let mut items = page.take_items();
+
+        while let Some(next_page) = self
+            .client
+            .get_page::<RepoPropertyValues>(&page.next)
+            .await
+            .map_err(|e| CoreError::Provider(e.to_string()))?
+        {
+            page = next_page;
+            items.extend(page.take_items());
+        }
+
+        Ok(items
+            .into_iter()
+            .map(|repo_props| {
+                let props = repo_props
+                    .properties
+                    .into_iter()
+                    .filter_map(|p| property_value_to_string(p.value).map(|v| (p.property_name, v)))
+                    .collect();
+                (repo_props.repository_full_name, props)
+            })
+            .collect())
+    }
 }
 
 fn resolve_token(raw: &str) -> multipush_core::Result<String> {
@@ -457,7 +542,24 @@ impl Provider for GitHubProvider {
                 repos.extend(page.take_items());
             }
 
-            let result: Vec<Repo> = repos.into_iter().map(|r| map_repo(r, org)).collect();
+            let mut result: Vec<Repo> = repos.into_iter().map(|r| map_repo(r, org)).collect();
+
+            match self.fetch_custom_properties(org).await {
+                Ok(properties_by_repo) => {
+                    for repo in &mut result {
+                        if let Some(props) = properties_by_repo.get(&repo.full_name) {
+                            repo.custom_properties = props.clone();
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        org = org,
+                        "failed to fetch custom properties; continuing without them"
+                    );
+                }
+            }
 
             tracing::debug!(count = result.len(), org = org, "listed repos");
 
@@ -1917,6 +2019,168 @@ mod tests {
         );
         assert!(!result[0].is_alphanumeric);
         assert!(result[1].is_alphanumeric);
+    }
+
+    fn repo_list_json(full_name: &str) -> serde_json::Value {
+        let parts: Vec<&str> = full_name.splitn(2, '/').collect();
+        serde_json::json!({
+            "id": 1,
+            "node_id": "MDEwOlJlcG9zaXRvcnkx",
+            "name": parts[1],
+            "full_name": full_name,
+            "owner": sample_owner(parts[0]),
+            "html_url": format!("https://github.com/{full_name}"),
+            "url": format!("https://api.github.com/repos/{full_name}"),
+            "default_branch": "main",
+            "archived": false,
+            "visibility": "private",
+            "created_at": "2020-01-01T00:00:00Z",
+            "updated_at": "2020-06-01T00:00:00Z"
+        })
+    }
+
+    #[tokio::test]
+    async fn list_repos_merges_custom_properties() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/repos"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                repo_list_json("test-org/alpha"),
+                repo_list_json("test-org/beta"),
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/properties/values"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "repository_id": 1,
+                    "repository_name": "alpha",
+                    "repository_full_name": "test-org/alpha",
+                    "properties": [
+                        {"property_name": "team", "value": "platform"},
+                        {"property_name": "unset", "value": null}
+                    ]
+                },
+                {
+                    "repository_id": 2,
+                    "repository_name": "beta",
+                    "repository_full_name": "test-org/beta",
+                    "properties": [
+                        {"property_name": "team", "value": "web"}
+                    ]
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let result = provider.list_repos("test-org").await.unwrap();
+        assert_eq!(result.len(), 2);
+
+        let alpha = result.iter().find(|r| r.name == "alpha").unwrap();
+        assert_eq!(
+            alpha.custom_properties.get("team"),
+            Some(&"platform".to_string())
+        );
+        assert!(!alpha.custom_properties.contains_key("unset"));
+
+        let beta = result.iter().find(|r| r.name == "beta").unwrap();
+        assert_eq!(beta.custom_properties.get("team"), Some(&"web".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_repos_paginates_custom_properties() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/repos"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                repo_list_json("test-org/alpha"),
+                repo_list_json("test-org/beta"),
+            ])))
+            .mount(&server)
+            .await;
+
+        let next_url = format!("{}/orgs/test-org/properties/values?page=2", server.uri());
+
+        // Mounted first so it takes precedence over the catch-all "page 1"
+        // mock below when the "page=2" request comes in (wiremock resolves
+        // same-priority matches by insertion order).
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/properties/values"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "repository_id": 2,
+                    "repository_name": "beta",
+                    "repository_full_name": "test-org/beta",
+                    "properties": [{"property_name": "team", "value": "web"}]
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/properties/values"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Link", format!("<{next_url}>; rel=\"next\""))
+                    .set_body_json(serde_json::json!([
+                        {
+                            "repository_id": 1,
+                            "repository_name": "alpha",
+                            "repository_full_name": "test-org/alpha",
+                            "properties": [{"property_name": "team", "value": "platform"}]
+                        }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        let result = provider.list_repos("test-org").await.unwrap();
+
+        let alpha = result.iter().find(|r| r.name == "alpha").unwrap();
+        assert_eq!(
+            alpha.custom_properties.get("team"),
+            Some(&"platform".to_string())
+        );
+        let beta = result.iter().find(|r| r.name == "beta").unwrap();
+        assert_eq!(beta.custom_properties.get("team"), Some(&"web".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_repos_continues_when_custom_properties_fail() {
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/repos"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([repo_list_json("test-org/alpha"),])),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/properties/values"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(github_error_json("Forbidden")))
+            .mount(&server)
+            .await;
+
+        let result = provider.list_repos("test-org").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].custom_properties.is_empty());
     }
 
     #[tokio::test]

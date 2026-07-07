@@ -11,8 +11,8 @@ use crate::Result;
 /// Apply name globs, exclude lists, and `exclude_archived` to `repos`.
 ///
 /// This intentionally does not run the more expensive `filters` (`has_file`,
-/// `topic`, `visibility`). Use [`filter_repos`] for the full async filter
-/// chain.
+/// `topic`, `visibility`, `custom_property`). Use [`filter_repos`] for the
+/// full async filter chain.
 pub fn filter_repos_basic(repos: &[Repo], targets: &TargetConfig) -> Result<Vec<Repo>> {
     let include = {
         let mut builder = GlobSetBuilder::new();
@@ -94,6 +94,15 @@ pub async fn filter_repos(
                         continue 'repo;
                     }
                 }
+                FilterConfig::CustomProperty(f) => {
+                    let value_matches = repo
+                        .custom_properties
+                        .get(&f.key)
+                        .is_some_and(|v| v == &f.value);
+                    if value_matches == f.negate {
+                        continue 'repo;
+                    }
+                }
             }
         }
         result.push(repo);
@@ -105,6 +114,7 @@ pub async fn filter_repos(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CustomPropertyFilter;
     use crate::model::Visibility;
     use crate::testing::MockProvider;
     use std::collections::HashMap;
@@ -288,6 +298,65 @@ mod tests {
             .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].full_name, "org/pub");
+    }
+
+    #[tokio::test]
+    async fn custom_property_filter_matches() {
+        let mut a = make_repo("org/a", false);
+        a.custom_properties
+            .insert("team".to_string(), "platform".to_string());
+        let mut b = make_repo("org/b", false);
+        b.custom_properties
+            .insert("team".to_string(), "web".to_string());
+        let c = make_repo("org/c", false);
+
+        let provider = MockProvider::new(vec![]);
+        let t = TargetConfig {
+            repos: vec!["org/*".into()],
+            exclude: vec![],
+            exclude_archived: true,
+            filters: vec![FilterConfig::CustomProperty(CustomPropertyFilter {
+                key: "team".into(),
+                value: "platform".into(),
+                negate: false,
+            })],
+        };
+
+        let result = filter_repos(&[a, b, c], &t, &provider).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].full_name, "org/a");
+    }
+
+    #[tokio::test]
+    async fn custom_property_filter_negated() {
+        let mut a = make_repo("org/a", false);
+        a.custom_properties
+            .insert("team".to_string(), "platform".to_string());
+        let mut b = make_repo("org/b", false);
+        b.custom_properties
+            .insert("team".to_string(), "web".to_string());
+        let c = make_repo("org/c", false);
+
+        let provider = MockProvider::new(vec![]);
+        let t = TargetConfig {
+            repos: vec!["org/*".into()],
+            exclude: vec![],
+            exclude_archived: true,
+            filters: vec![FilterConfig::CustomProperty(CustomPropertyFilter {
+                key: "team".into(),
+                value: "platform".into(),
+                negate: true,
+            })],
+        };
+
+        let mut names: Vec<String> = filter_repos(&[a, b, c], &t, &provider)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.full_name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["org/b", "org/c"]);
     }
 
     #[tokio::test]

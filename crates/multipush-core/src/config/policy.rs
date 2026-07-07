@@ -103,4 +103,19 @@ pub enum FilterConfig {
     HasFile(String),
     Topic(String),
     Visibility(Visibility),
+    CustomProperty(CustomPropertyFilter),
+}
+
+/// Matches (or, with `negate`, excludes) repos where the custom property
+/// `key` is set to `value`.
+///
+/// Custom properties are organization-defined repo metadata; see
+/// <https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization>.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CustomPropertyFilter {
+    pub key: String,
+    pub value: String,
+    #[serde(default)]
+    pub negate: bool,
 }
