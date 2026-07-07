@@ -107,6 +107,21 @@ struct CreateAutolinkRequest<'a> {
     is_alphanumeric: bool,
 }
 
+// --- Branch protection PUT body (GitHub's PUT schema requires all of these
+// top-level keys to be present, unlike the differently-shaped GET response
+// that `parse_branch_protection` reads) ---
+
+#[derive(serde::Serialize)]
+struct BranchProtectionPutBody {
+    required_status_checks: Option<RequiredStatusChecks>,
+    enforce_admins: bool,
+    required_pull_request_reviews: Option<RequiredPullRequestReviews>,
+    restrictions: Option<serde_json::Value>,
+    required_linear_history: bool,
+    allow_force_pushes: bool,
+    allow_deletions: bool,
+}
+
 struct RateLimitState {
     remaining: Option<u64>,
     reset: Option<u64>,
@@ -127,12 +142,12 @@ impl GitHubProvider {
         if let Some(ref url) = config.base_url {
             builder = builder
                 .base_uri(url)
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
         }
 
         let client = builder
             .build()
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
         Ok(Self {
             client,
@@ -152,7 +167,7 @@ impl GitHubProvider {
                 branch.to_string(),
             ))
             .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
         match reference.object {
             octocrab::models::repos::Object::Commit { sha, .. } => Ok(sha),
@@ -184,7 +199,7 @@ impl GitHubProvider {
                 tracing::debug!("Branch {} already exists, reusing", branch);
                 Ok(())
             }
-            Err(e) => Err(CoreError::Provider(e.to_string())),
+            Err(e) => Err(CoreError::Provider(describe_octocrab_error(e))),
         }
     }
 
@@ -205,7 +220,7 @@ impl GitHubProvider {
                         .branch(branch)
                         .send()
                         .await
-                        .map_err(|e| CoreError::Provider(e.to_string()))?;
+                        .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
                 }
                 None => {
                     repos
@@ -213,7 +228,7 @@ impl GitHubProvider {
                         .branch(branch)
                         .send()
                         .await
-                        .map_err(|e| CoreError::Provider(e.to_string()))?;
+                        .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
                 }
             }
         } else {
@@ -228,7 +243,7 @@ impl GitHubProvider {
                 .branch(branch)
                 .send()
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
         }
 
         Ok(())
@@ -254,7 +269,7 @@ impl GitHubProvider {
                 None::<&()>,
             )
             .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
         let base_tree_sha = commit["tree"]["sha"]
             .as_str()
@@ -296,7 +311,7 @@ impl GitHubProvider {
                 }),
             )
             .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
         // Create commit
         let message = changes
@@ -315,7 +330,7 @@ impl GitHubProvider {
                 })),
             )
             .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
         let new_commit_sha = new_commit["sha"]
             .as_str()
@@ -336,7 +351,7 @@ impl GitHubProvider {
                 }),
             )
             .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
         Ok(())
     }
@@ -414,7 +429,7 @@ impl GitHubProvider {
                 );
                 self.fetch_custom_properties_per_repo(repos).await
             }
-            Err(e) => Err(CoreError::Provider(e.to_string())),
+            Err(e) => Err(CoreError::Provider(describe_octocrab_error(e))),
         }
     }
 
@@ -468,7 +483,7 @@ impl GitHubProvider {
                     None::<&()>,
                 )
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             let props = values
                 .into_iter()
@@ -478,6 +493,21 @@ impl GitHubProvider {
         }
 
         Ok(result)
+    }
+}
+
+/// Extract GitHub's actual error message from an `octocrab::Error`.
+///
+/// `octocrab::Error`'s `Display` impl for the `GitHub` variant (the common
+/// case — any non-2xx API response) prints only the bare variant name
+/// ("GitHub"), not the response body. The real message — the thing that
+/// tells you *why* a request failed (permission denied, validation error,
+/// etc.) — lives one level down on the wrapped `GitHubError`, whose own
+/// `Display` does include it.
+fn describe_octocrab_error(e: octocrab::Error) -> String {
+    match &e {
+        octocrab::Error::GitHub { source, .. } => source.to_string(),
+        _ => e.to_string(),
     }
 }
 
@@ -581,7 +611,7 @@ impl Provider for GitHubProvider {
                 .per_page(100)
                 .send()
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             let mut repos = page.take_items();
 
@@ -589,7 +619,7 @@ impl Provider for GitHubProvider {
                 .client
                 .get_page::<octocrab::models::Repository>(&page.next)
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?
             {
                 page = next_page;
                 repos.extend(page.take_items());
@@ -661,7 +691,7 @@ impl Provider for GitHubProvider {
                 {
                     Ok(None)
                 }
-                Err(e) => Err(CoreError::Provider(e.to_string())),
+                Err(e) => Err(CoreError::Provider(describe_octocrab_error(e))),
             }
         }
         .instrument(debug_span!("api", method = "get_file", repo = %repo.full_name, path = path))
@@ -680,7 +710,7 @@ impl Provider for GitHubProvider {
                 .client
                 .get(format!("/repos/{}/{}", repo.owner, repo.name), None::<&()>)
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             // GitHub omits some of these fields on legacy repos; default to
             // GitHub's documented defaults rather than failing the whole run.
@@ -725,7 +755,7 @@ impl Provider for GitHubProvider {
                 .per_page(1)
                 .send()
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(page.items.first().map(map_octocrab_pr))
         }
@@ -763,7 +793,7 @@ impl Provider for GitHubProvider {
                 .body(body)
                 .send()
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(map_octocrab_pr(&pr))
         }
@@ -812,7 +842,7 @@ impl Provider for GitHubProvider {
                 .client
                 .patch(format!("/repos/{}/{}", repo.owner, repo.name), Some(patch))
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(())
         }
@@ -844,7 +874,7 @@ impl Provider for GitHubProvider {
                 {
                     Ok(None)
                 }
-                Err(e) => Err(CoreError::Provider(e.to_string())),
+                Err(e) => Err(CoreError::Provider(describe_octocrab_error(e))),
             }
         }
         .instrument(debug_span!("api", method = "get_branch_protection", repo = %repo.full_name, branch = branch))
@@ -865,7 +895,7 @@ impl Provider for GitHubProvider {
                     None::<&()>,
                 )
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             let node_id = pr_detail["node_id"]
                 .as_str()
@@ -886,7 +916,7 @@ impl Provider for GitHubProvider {
                 .client
                 .post("/graphql", Some(&body))
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(())
         }
@@ -903,6 +933,57 @@ impl Provider for GitHubProvider {
         async {
             self.check_rate_limit().await?;
 
+            // GitHub's branch protection PUT is a full replace, not a merge:
+            // `required_status_checks`, `enforce_admins`,
+            // `required_pull_request_reviews`, and `restrictions` are all
+            // required top-level keys (nullable, but the key itself can't be
+            // omitted) — sending only the fields a policy actually declares
+            // gets rejected outright. Fetch the current protection first and
+            // fall back to it for anything `patch` doesn't set, so applying
+            // one policy's patch doesn't wipe out settings a different
+            // policy (or a human) configured.
+            //
+            // Exception: `restrictions` (push access restrictions) isn't
+            // modeled by multipush at all yet, so it's always sent as
+            // `null`. If a branch currently has restrictions configured
+            // outside of multipush, applying `!branch_protection` to it will
+            // clear them.
+            let current = self.get_branch_protection(repo, branch).await?;
+
+            let body = BranchProtectionPutBody {
+                required_status_checks: patch
+                    .required_status_checks
+                    .clone()
+                    .or_else(|| current.as_ref().and_then(|c| c.required_status_checks.clone())),
+                enforce_admins: patch.enforce_admins.unwrap_or_else(|| {
+                    current.as_ref().map(|c| c.enforce_admins).unwrap_or(false)
+                }),
+                required_pull_request_reviews: patch
+                    .required_pull_request_reviews
+                    .clone()
+                    .or_else(|| {
+                        current
+                            .as_ref()
+                            .and_then(|c| c.required_pull_request_reviews.clone())
+                    }),
+                restrictions: None,
+                required_linear_history: patch.required_linear_history.unwrap_or_else(|| {
+                    current
+                        .as_ref()
+                        .map(|c| c.required_linear_history)
+                        .unwrap_or(false)
+                }),
+                allow_force_pushes: patch.allow_force_pushes.unwrap_or_else(|| {
+                    current
+                        .as_ref()
+                        .map(|c| c.allow_force_pushes)
+                        .unwrap_or(false)
+                }),
+                allow_deletions: patch.allow_deletions.unwrap_or_else(|| {
+                    current.as_ref().map(|c| c.allow_deletions).unwrap_or(false)
+                }),
+            };
+
             let _: serde_json::Value = self
                 .client
                 .put(
@@ -910,10 +991,10 @@ impl Provider for GitHubProvider {
                         "/repos/{}/{}/branches/{}/protection",
                         repo.owner, repo.name, branch
                     ),
-                    Some(patch),
+                    Some(&body),
                 )
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(())
         }
@@ -932,7 +1013,7 @@ impl Provider for GitHubProvider {
                     None::<&()>,
                 )
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(payloads
                 .into_iter()
@@ -969,7 +1050,7 @@ impl Provider for GitHubProvider {
                     Some(&body),
                 )
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(())
         }
@@ -991,11 +1072,11 @@ impl Provider for GitHubProvider {
                     None::<&()>,
                 )
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             octocrab::map_github_error(response)
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(|e| CoreError::Provider(describe_octocrab_error(e)))?;
 
             Ok(())
         }
@@ -1990,15 +2071,87 @@ mod tests {
             ..Default::default()
         };
 
+        // No current protection: GET 404s, so update_branch_protection
+        // should fall back to false/null for everything `patch` doesn't set.
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(github_error_json("Branch not protected")),
+            )
+            .mount(&server)
+            .await;
+
         Mock::given(method("PUT"))
             .and(path("/repos/test-org/test-repo/branches/main/protection"))
             .and(body_json(serde_json::json!({
+                "required_status_checks": null,
                 "required_pull_request_reviews": {
                     "required_approving_review_count": 1,
                     "dismiss_stale_reviews": false,
                     "require_code_owner_reviews": false
                 },
-                "enforce_admins": true
+                "enforce_admins": true,
+                "restrictions": null,
+                "required_linear_history": false,
+                "allow_force_pushes": false,
+                "allow_deletions": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        provider
+            .update_branch_protection(&repo, "main", &patch)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_branch_protection_preserves_untouched_current_fields() {
+        use wiremock::matchers::body_json;
+
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+        let repo = test_repo();
+
+        mount_rate_limit(&server).await;
+
+        // Current protection already has required_status_checks and
+        // allow_force_pushes configured; the patch only touches
+        // enforce_admins. Those untouched fields must survive the PUT
+        // instead of being nulled/reset.
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "required_status_checks": {
+                    "strict": true,
+                    "contexts": ["ci/build"]
+                },
+                "enforce_admins": { "enabled": false },
+                "allow_force_pushes": { "enabled": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let patch = multipush_core::model::BranchProtectionPatch {
+            enforce_admins: Some(true),
+            ..Default::default()
+        };
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-org/test-repo/branches/main/protection"))
+            .and(body_json(serde_json::json!({
+                "required_status_checks": {
+                    "strict": true,
+                    "contexts": ["ci/build"]
+                },
+                "required_pull_request_reviews": null,
+                "enforce_admins": true,
+                "restrictions": null,
+                "required_linear_history": false,
+                "allow_force_pushes": true,
+                "allow_deletions": false
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .expect(1)

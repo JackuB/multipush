@@ -490,6 +490,15 @@ under *Branch protection updates*.
   required_linear_history: true
 ```
 
+Fields you don't set are left as-is if the branch already has protection
+configured — multipush reads the branch's current protection first and only
+overwrites what the policy declares. The one exception is push access
+restrictions (which users/teams/apps can push to the branch): multipush
+doesn't support configuring these and always clears them on apply, since
+GitHub's API doesn't allow leaving that field untouched. If a branch relies
+on push restrictions configured outside multipush, don't apply
+`!branch_protection` to it.
+
 ### `!ensure_autolink`
 
 Ensure a [GitHub autolink reference](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-autolinks-to-reference-external-resources)
