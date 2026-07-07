@@ -49,6 +49,7 @@ home = "0.5"
 # GitHub
 octocrab = "0.41"
 base64 = "0.22"
+http = "1"
 
 # Testing
 wiremock = "0.6"

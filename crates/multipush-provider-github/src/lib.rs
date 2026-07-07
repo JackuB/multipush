@@ -382,33 +382,60 @@ impl GitHubProvider {
         Ok(())
     }
 
-    /// Fetch custom property values for every repo in `org` in one batched,
-    /// paginated call, keyed by the repo's `full_name`.
+    /// Fetch custom property values for every repo in `org`, keyed by the
+    /// repo's `full_name`.
     ///
-    /// Not part of the `Provider` trait: it's an org-wide bulk fetch used
-    /// internally by `list_repos` rather than a per-repo operation.
+    /// Not part of the `Provider` trait: it's a bulk fetch used internally
+    /// by `list_repos`.
+    ///
+    /// Prefers one batched, paginated call to the org-wide endpoint (needs
+    /// the "Custom properties" **organization** permission). Fine-grained
+    /// tokens scoped to repos rather than the org typically only carry the
+    /// **repository**-level "Custom properties" permission instead, which
+    /// the org-wide endpoint rejects with 403 — in that case, fall back to
+    /// fetching each repo's properties individually, which only needs
+    /// ordinary repo read access.
     async fn fetch_custom_properties(
         &self,
         org: &str,
+        repos: &[Repo],
     ) -> multipush_core::Result<HashMap<String, HashMap<String, String>>> {
         self.check_rate_limit().await?;
 
+        match self.fetch_custom_properties_org(org).await {
+            Ok(map) => Ok(map),
+            Err(octocrab::Error::GitHub { source, .. })
+                if source.status_code == http::StatusCode::FORBIDDEN =>
+            {
+                tracing::debug!(
+                    org = org,
+                    "org-wide custom properties read forbidden (missing the \"Custom properties\" \
+                     organization permission); falling back to per-repo fetch"
+                );
+                self.fetch_custom_properties_per_repo(repos).await
+            }
+            Err(e) => Err(CoreError::Provider(e.to_string())),
+        }
+    }
+
+    async fn fetch_custom_properties_org(
+        &self,
+        org: &str,
+    ) -> Result<HashMap<String, HashMap<String, String>>, octocrab::Error> {
         let mut page: octocrab::Page<RepoPropertyValues> = self
             .client
             .get(
                 format!("/orgs/{org}/properties/values"),
                 Some(&PropertiesQuery { per_page: 100 }),
             )
-            .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?;
+            .await?;
 
         let mut items = page.take_items();
 
         while let Some(next_page) = self
             .client
             .get_page::<RepoPropertyValues>(&page.next)
-            .await
-            .map_err(|e| CoreError::Provider(e.to_string()))?
+            .await?
         {
             page = next_page;
             items.extend(page.take_items());
@@ -425,6 +452,32 @@ impl GitHubProvider {
                 (repo_props.repository_full_name, props)
             })
             .collect())
+    }
+
+    async fn fetch_custom_properties_per_repo(
+        &self,
+        repos: &[Repo],
+    ) -> multipush_core::Result<HashMap<String, HashMap<String, String>>> {
+        let mut result = HashMap::with_capacity(repos.len());
+
+        for repo in repos {
+            let values: Vec<RepoPropertyValue> = self
+                .client
+                .get(
+                    format!("/repos/{}/{}/properties/values", repo.owner, repo.name),
+                    None::<&()>,
+                )
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
+
+            let props = values
+                .into_iter()
+                .filter_map(|p| property_value_to_string(p.value).map(|v| (p.property_name, v)))
+                .collect();
+            result.insert(repo.full_name.clone(), props);
+        }
+
+        Ok(result)
     }
 }
 
@@ -544,7 +597,7 @@ impl Provider for GitHubProvider {
 
             let mut result: Vec<Repo> = repos.into_iter().map(|r| map_repo(r, org)).collect();
 
-            match self.fetch_custom_properties(org).await {
+            match self.fetch_custom_properties(org, &result).await {
                 Ok(properties_by_repo) => {
                     for repo in &mut result {
                         if let Some(props) = properties_by_repo.get(&repo.full_name) {
@@ -553,10 +606,11 @@ impl Provider for GitHubProvider {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         error = %e,
                         org = org,
-                        "failed to fetch custom properties; continuing without them"
+                        "failed to fetch custom properties; continuing without them \
+                         (any custom_property filter will match nothing this run)"
                     );
                 }
             }
@@ -2181,6 +2235,59 @@ mod tests {
         let result = provider.list_repos("test-org").await.unwrap();
         assert_eq!(result.len(), 1);
         assert!(result[0].custom_properties.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_repos_falls_back_to_per_repo_custom_properties_on_403() {
+        // Simulates a fine-grained token that has the *repository*-level
+        // "Custom properties" permission but not the *organization*-level
+        // one: the org-wide endpoint 403s, so multipush should fetch each
+        // repo's properties individually instead of giving up.
+        let server = MockServer::start().await;
+        let provider = provider_with_mock(&server).await;
+
+        mount_rate_limit(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/repos"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                repo_list_json("test-org/alpha"),
+                repo_list_json("test-org/beta"),
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/orgs/test-org/properties/values"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(github_error_json("Forbidden")))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/alpha/properties/values"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"property_name": "team", "value": "platform"}
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-org/beta/properties/values"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"property_name": "team", "value": "web"}
+            ])))
+            .mount(&server)
+            .await;
+
+        let result = provider.list_repos("test-org").await.unwrap();
+
+        let alpha = result.iter().find(|r| r.name == "alpha").unwrap();
+        assert_eq!(
+            alpha.custom_properties.get("team"),
+            Some(&"platform".to_string())
+        );
+        let beta = result.iter().find(|r| r.name == "beta").unwrap();
+        assert_eq!(beta.custom_properties.get("team"), Some(&"web".to_string()));
     }
 
     #[tokio::test]

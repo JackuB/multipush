@@ -133,6 +133,33 @@ provider:
   token: ${GITHUB_TOKEN}
 ```
 
+#### Token permissions
+
+For a classic PAT, `repo` and `read:org` cover everything below. For a
+fine-grained PAT or GitHub App, grant:
+
+| Needed for | Permission |
+|---|---|
+| Reading repos, files, topics, settings | Repository: Contents (read), Metadata (read), Administration (read) |
+| Opening/updating PRs (`apply`) | Repository: Pull requests (read and write) |
+| Branch protection rules | Repository: Administration (read and write) |
+| Autolinks (`!ensure_autolink`) | Repository: Administration (read and write) |
+| The `!custom_property` filter | Organization: Custom properties (read) — see below |
+
+The `!custom_property` filter reads GitHub's [custom repository
+properties](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization).
+GitHub splits read access to these into two *separate* fine-grained
+permissions, and it's easy to grant the wrong one:
+
+- **Organization permission "Custom properties" (read)** — lets multipush fetch every repo's properties in one batched call. This is what you want for org-wide tokens, but it must be approved by an org owner and is easy to miss since it's not under "Repository permissions" with everything else.
+- **Repository permission "Custom properties"** — works too, but only if you skipped the organization permission above: multipush falls back to fetching properties one repo at a time when the org-wide call is rejected. Slower for large orgs, but correct.
+
+If neither permission is granted, multipush doesn't fail the run — it logs
+an error and treats every repo as having no custom properties, which means
+a `!custom_property` filter (without `negate: true`) will silently match
+zero repos. If a `custom_property` filter isn't matching anything you
+expect it to, this is the first thing to check.
+
 ### `defaults`
 
 Optional. Sets defaults applied to all policies.
@@ -254,7 +281,7 @@ targets:
 | `!has_file` | file path | Only repos containing this file |
 | `!topic` | topic name | Only repos with this GitHub topic |
 | `!visibility` | `public` \| `private` \| `internal` | Only repos with this visibility |
-| `!custom_property` | `key`, `value`, `negate` (optional, default `false`) | Only repos whose [custom property](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization) `key` equals `value`. Set `negate: true` to keep repos where it does *not* equal `value` (including repos where the property isn't set). |
+| `!custom_property` | `key`, `value`, `negate` (optional, default `false`) | Only repos whose [custom property](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization) `key` equals `value`. Set `negate: true` to keep repos where it does *not* equal `value` (including repos where the property isn't set). Needs a specific token permission — see [Token permissions](#token-permissions). |
 
 ## Rules
 
